@@ -1,0 +1,14 @@
+DROP TABLE public.api_list;
+DROP TYPE public."httpmethodenum";
+DROP TABLE public.menu;
+DROP TABLE public.group_permissions;
+DROP TABLE public.role_permissions;
+DROP TABLE public.user_permission;
+DROP TABLE public.permission_attribute_list;
+DROP TABLE public.permission_attribute;
+DROP TABLE public."permission";
+DROP TABLE public.user_group_roles;
+DROP TABLE public."group";
+DROP TABLE public."role";
+DROP TABLE public.user_profile;
+DROP TABLE public."user";
