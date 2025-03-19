@@ -36,13 +36,30 @@ pub fn add_session<C: ConnectionLike>(
 
 pub fn get_session<C: ConnectionLike>(
     redis_conn: &mut C,
-    jwt_claims: String,
+    token: String,
 ) -> anyhow::Result<Option<SessionData>> {
-    let res: Option<String> = redis::cmd("get").arg(jwt_claims).query(redis_conn)?;
+    let res: Option<String> = redis::cmd("get").arg(token).query(redis_conn)?;
     if res.is_none() {
         return Ok(None);
     }
     let res = res.unwrap();
     let session_data: SessionData = serde_json::from_str(res.as_str())?;
     Ok(Some(session_data))
+}
+
+pub fn remove_session<C: ConnectionLike>(
+    redis_conn: &mut C,
+    token: String,
+) -> anyhow::Result<bool> {
+    let res: Option<String> = redis::cmd("get").arg(&token).query(redis_conn)?;
+    if res.is_none() {
+        return Ok(false);
+    }
+    let res = res.unwrap();
+    let session_data: SessionData = serde_json::from_str(res.as_str())?;
+    redis::cmd("del")
+        .arg(session_data.refresh_token)
+        .exec(redis_conn)?;
+    redis::cmd("del").arg(token).exec(redis_conn)?;
+    Ok(true)
 }
