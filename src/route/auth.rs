@@ -348,7 +348,7 @@ impl ApiAuth {
                 return LogoutResponses::InternalServerError(Json(
                     InternalServerErrorResponse::new(
                         "route.auth",
-                        "auth_validate",
+                        "auth_logout",
                         "get user from token",
                         &err.to_string(),
                     ),
@@ -361,7 +361,7 @@ impl ApiAuth {
         if let Err(err) = remove_session(&mut redis_conn, jwt_token.unwrap()) {
             return LogoutResponses::InternalServerError(Json(InternalServerErrorResponse::new(
                 "route.auth",
-                "auth_validate",
+                "auth_logout",
                 "remove session",
                 &err.to_string(),
             )));

@@ -5,10 +5,10 @@ use poem_openapi::{
 
 #[derive(Object, Debug)]
 pub struct PaginateResponse<T: ToJSON + ParseFromJSON> {
-    pub page: i32,
-    pub page_size: i32,
-    pub num_data: i32,
-    pub num_page: i32,
+    pub counts: u32,
+    pub page: u32,
+    pub page_count: u32,
+    pub page_size: u32,
     pub results: Vec<T>,
 }
 
