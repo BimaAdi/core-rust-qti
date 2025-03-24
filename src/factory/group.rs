@@ -4,20 +4,20 @@ use serde::Deserialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::model::role::{Role, TABLE_NAME};
+use crate::model::group::{Group, TABLE_NAME};
 
-pub struct RoleFactory<T: Clone> {
-    modifier_one: fn(x: &Role, ext: T) -> Role,
-    modifier_many: fn(x: &Role, idx: usize, ext: T) -> Role,
+pub struct GroupFactory<T: Clone> {
+    modifier_one: fn(x: &Group, ext: T) -> Group,
+    modifier_many: fn(x: &Group, idx: usize, ext: T) -> Group,
 }
 
-impl<T: Clone> Default for RoleFactory<T> {
+impl<T: Clone> Default for GroupFactory<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: Clone> RoleFactory<T> {
+impl<T: Clone> GroupFactory<T> {
     pub fn new() -> Self {
         Self {
             modifier_one: |x, _| x.clone(),
@@ -25,23 +25,23 @@ impl<T: Clone> RoleFactory<T> {
         }
     }
 
-    pub fn modified_one(&mut self, modifier: fn(x: &Role, ext: T) -> Role) {
+    pub fn modified_one(&mut self, modifier: fn(x: &Group, ext: T) -> Group) {
         self.modifier_one = modifier
     }
 
-    pub fn modified_many(&mut self, modifier: fn(x: &Role, idx: usize, ext: T) -> Role) {
+    pub fn modified_many(&mut self, modifier: fn(x: &Group, idx: usize, ext: T) -> Group) {
         self.modifier_many = modifier
     }
 
-    pub async fn generate_one(&mut self, db: &PgPool, ext: T) -> anyhow::Result<Role> {
-        let data = RoleDummy::new();
+    pub async fn generate_one(&mut self, db: &PgPool, ext: T) -> anyhow::Result<Group> {
+        let data = GroupDummy::new();
         let data = data.generate_one();
         let data = (self.modifier_one)(&data, ext);
         sqlx::query(format!(r#"
-        INSERT INTO {} (id, role_name, description, is_active, created_by, updated_by, created_date, updated_date, deleted_date) 
+        INSERT INTO {} (id, group_name, description, is_active, created_by, updated_by, created_date, updated_date, deleted_date) 
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#, TABLE_NAME).as_str())
         .bind(data.id)
-        .bind(&data.role_name)
+        .bind(&data.group_name)
         .bind(&data.description)
         .bind(data.is_active)
         .bind(data.created_by)
@@ -58,19 +58,19 @@ impl<T: Clone> RoleFactory<T> {
         db: &PgPool,
         num: u32,
         ext: T,
-    ) -> anyhow::Result<Vec<Role>> {
-        let data = RoleDummy::new();
+    ) -> anyhow::Result<Vec<Group>> {
+        let data = GroupDummy::new();
         let data = data.generate_many(num);
-        let mut result: Vec<Role> = vec![];
+        let mut result: Vec<Group> = vec![];
         for (idx, item) in data.iter().enumerate() {
             result.push((self.modifier_many)(item, idx, ext.clone()));
         }
         let mut tx = db.begin().await?;
         for item in result.clone() {
-            sqlx::query(format!(r#"INSERT INTO {} (id, role_name, description, is_active, created_by, updated_by, created_date, updated_date, deleted_date) 
+            sqlx::query(format!(r#"INSERT INTO {} (id, group_name, description, is_active, created_by, updated_by, created_date, updated_date, deleted_date) 
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#, TABLE_NAME).as_str())
             .bind(item.id)
-            .bind(&item.role_name)
+            .bind(&item.group_name)
             .bind(&item.description)
             .bind(item.is_active)
             .bind(item.created_by)
@@ -87,9 +87,9 @@ impl<T: Clone> RoleFactory<T> {
 
 #[allow(dead_code)]
 #[derive(Debug, Default, Deserialize, Dummy, Clone)]
-struct RoleDummy {
+struct GroupDummy {
     pub id: Uuid,
-    pub role_name: String,
+    pub group_name: String,
     pub description: Option<String>,
     pub is_active: Option<bool>,
     pub created_by: Option<Uuid>,
@@ -99,16 +99,16 @@ struct RoleDummy {
     pub deleted_date: Option<DateTime<FixedOffset>>,
 }
 
-impl RoleDummy {
+impl GroupDummy {
     pub fn new() -> Self {
         Faker.fake::<Self>()
     }
 
-    pub fn generate_one(&self) -> Role {
-        let dummy = Faker.fake::<RoleDummy>();
-        Role {
+    pub fn generate_one(&self) -> Group {
+        let dummy = Faker.fake::<GroupDummy>();
+        Group {
             id: dummy.id,
-            role_name: dummy.role_name,
+            group_name: dummy.group_name,
             description: dummy.description,
             is_active: dummy.is_active,
             created_by: None,
@@ -119,13 +119,13 @@ impl RoleDummy {
         }
     }
 
-    pub fn generate_many(&self, num: u32) -> Vec<Role> {
-        let mut result: Vec<Role> = vec![];
+    pub fn generate_many(&self, num: u32) -> Vec<Group> {
+        let mut result: Vec<Group> = vec![];
         for _ in 0..num {
             let dummy = Faker.fake::<Self>();
-            result.push(Role {
+            result.push(Group {
                 id: dummy.id,
-                role_name: dummy.role_name,
+                group_name: dummy.group_name,
                 description: dummy.description,
                 is_active: dummy.is_active,
                 created_by: None,
@@ -146,8 +146,8 @@ mod tests {
     use uuid::Uuid;
 
     use crate::{
-        factory::role::RoleFactory,
-        model::role::{Role, TABLE_NAME},
+        factory::group::GroupFactory,
+        model::group::{Group, TABLE_NAME},
     };
 
     #[derive(Clone)]
@@ -160,7 +160,7 @@ mod tests {
     #[sqlx::test]
     async fn test_generate_one(pool: PgPool) -> anyhow::Result<()> {
         // When
-        let mut factory = RoleFactory::new();
+        let mut factory = GroupFactory::new();
         factory.generate_one(&pool, ()).await?;
 
         // Expect
@@ -175,10 +175,10 @@ mod tests {
     #[sqlx::test]
     async fn test_generate_one_modified(pool: PgPool) -> anyhow::Result<()> {
         // When
-        let mut factory = RoleFactory::<ExtData>::new();
-        factory.modified_one(|data, ext| Role {
+        let mut factory = GroupFactory::<ExtData>::new();
+        factory.modified_one(|data, ext| Group {
             id: ext.id,
-            role_name: "test_role".to_string(),
+            group_name: "test_group".to_string(),
             description: Some("test description".to_string()),
             is_active: Some(false),
             created_by: data.created_by,
@@ -198,7 +198,7 @@ mod tests {
         // Expect
         let res: (Uuid, String, Option<String>, Option<bool>) = sqlx::query_as(
             format!(
-                r#"SELECT id, role_name, description, is_active
+                r#"SELECT id, group_name, description, is_active
         FROM {}"#,
                 TABLE_NAME
             )
@@ -207,7 +207,7 @@ mod tests {
         .fetch_one(&pool)
         .await?;
         assert_eq!(res.0, ext.id);
-        assert_eq!(res.1, "test_role".to_string());
+        assert_eq!(res.1, "test_group".to_string());
         assert_eq!(res.2, Some("test description".to_string()));
         assert_eq!(res.3, Some(false));
         Ok(())
@@ -216,7 +216,7 @@ mod tests {
     #[sqlx::test]
     async fn test_generate_many(pool: PgPool) -> anyhow::Result<()> {
         // When
-        let mut factory = RoleFactory::new();
+        let mut factory = GroupFactory::new();
         factory.generate_many(&pool, 10, ()).await?;
 
         // Expect
@@ -231,10 +231,10 @@ mod tests {
     #[sqlx::test]
     async fn test_generate_many_modified(pool: PgPool) -> anyhow::Result<()> {
         // When
-        let mut factory = RoleFactory::<ExtData>::new();
-        factory.modified_many(|data, _, ext| Role {
+        let mut factory = GroupFactory::<ExtData>::new();
+        factory.modified_many(|data, _, ext| Group {
             id: data.id,
-            role_name: data.role_name.clone(),
+            group_name: data.group_name.clone(),
             description: data.description.clone(),
             is_active: Some(false),
             created_by: None,
