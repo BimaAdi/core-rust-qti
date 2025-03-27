@@ -72,18 +72,18 @@ pub struct DetailGroup {
 
 #[derive(Object, Deserialize)]
 pub struct DetailGroupRole {
-    pub role: DetailRole,
-    pub group: DetailGroup,
+    pub role: Option<DetailRole>,
+    pub group: Option<DetailGroup>,
 }
 
 #[derive(Object, Deserialize)]
 pub struct UserDetailResponse {
     pub id: String,
     pub user_name: String,
-    pub is_active: bool,
-    pub is_2faenabled: bool,
-    pub created_date: String,
-    pub updated_date: String,
+    pub is_active: Option<bool>,
+    pub is_2faenabled: Option<bool>,
+    pub created_date: Option<String>,
+    pub updated_date: Option<String>,
     pub user_profile: Option<DetailUserProfile>,
     pub created_by: Option<DetailCreatedOrUpdatedUser>,
     pub updated_by: Option<DetailCreatedOrUpdatedUser>,

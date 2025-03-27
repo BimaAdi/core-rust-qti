@@ -6,22 +6,32 @@ use poem_openapi::{param::Query, payload::Json, OpenApi, Tags};
 use uuid::Uuid;
 
 use crate::{
-    core::security::{get_user_from_token, hash_password, BearerAuthorization},
-    model::{user::User, user_group_roles::UserGroupRoles, user_profile::UserProfile},
+    core::{
+        security::{get_user_from_token, hash_password, BearerAuthorization},
+        utils::datetime_to_string_opt,
+    },
+    model::{
+        group::Group, role::Role, user::User, user_group_roles::UserGroupRoles,
+        user_profile::UserProfile,
+    },
     repository::{
         group::get_group_by_id,
         role::get_role_by_id,
-        user::{create_user, upsert_user_group_roles},
+        user::{
+            create_user, get_user_by_id, get_user_group_roles_by_user, upsert_user_group_roles,
+        },
     },
     schema::{
-        common::{BadRequestResponse, InternalServerErrorResponse, UnauthorizedResponse},
+        common::{
+            BadRequestResponse, InternalServerErrorResponse, NotFoundResponse, UnauthorizedResponse,
+        },
         user::{
             AddUserGroupRoleRequest, AddUserGroupRoleResponses, ChangeStatusRequest,
-            ChangeStatusResponses, DeleteUserGroupRoleResponses, DetailGroup, DetailGroupRole,
-            DetailRole, DetailUserProfile, GetAllUserResponses, GetPaginateUserResponses,
-            ResetPasswordRequest, ResetPasswordResponses, UserCreateRequest, UserCreateResponse,
-            UserCreateResponses, UserDeleteResponses, UserDetailResponses, UserUpdateRequest,
-            UserUpdateResponses,
+            ChangeStatusResponses, DeleteUserGroupRoleResponses, DetailCreatedOrUpdatedUser,
+            DetailGroup, DetailGroupRole, DetailRole, DetailUserProfile, GetAllUserResponses,
+            GetPaginateUserResponses, ResetPasswordRequest, ResetPasswordResponses,
+            UserCreateRequest, UserCreateResponse, UserCreateResponses, UserDeleteResponses,
+            UserDetailResponse, UserDetailResponses, UserUpdateRequest, UserUpdateResponses,
         },
     },
     AppState,
@@ -63,11 +73,204 @@ impl ApiUser {
     #[oai(path = "/user/detail/", method = "get", tag = "ApiUserTags::User")]
     async fn user_detail_api(
         &self,
-        Query(_id): Query<String>,
-        _state: Data<&Arc<AppState>>,
-        _auth: BearerAuthorization,
+        Query(id): Query<String>,
+        state: Data<&Arc<AppState>>,
+        auth: BearerAuthorization,
     ) -> UserDetailResponses {
-        todo!()
+        // Begin db transaction
+        let mut tx = match state.db.begin().await {
+            Ok(val) => val,
+            Err(err) => {
+                return UserDetailResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "user_detail_api",
+                        "begin transaction",
+                        &err.to_string(),
+                    ),
+                ));
+            }
+        };
+
+        // get redis conn from pool
+        let mut redis_conn = match state.redis_conn.get() {
+            Ok(val) => val,
+            Err(err) => {
+                return UserDetailResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "user_detail_api",
+                        "get redis pool connection",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+
+        // Validate user token
+        let jwt_token = auth.0.token;
+        let request_user =
+            match get_user_from_token(&mut tx, &mut redis_conn, jwt_token.clone()).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return UserDetailResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "user_detail_api",
+                            "get user from token",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            };
+        if request_user.is_none() {
+            return UserDetailResponses::Unauthorized(Json(UnauthorizedResponse::default()));
+        }
+
+        let id = match Uuid::parse_str(&id) {
+            Ok(val) => val,
+            Err(_) => {
+                return UserDetailResponses::NotFound(Json(NotFoundResponse {
+                    message: format!("user with id = {} not found", &id),
+                }))
+            }
+        };
+        let (user, user_profile) = match get_user_by_id(&mut tx, &id, None).await {
+            Ok(val) => val,
+            Err(err) => {
+                return UserDetailResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "user_detail_api",
+                        "get_user_by_id",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+        if user.is_none() {
+            return UserDetailResponses::NotFound(Json(NotFoundResponse {
+                message: format!("user with id = {} not found", &id),
+            }));
+        }
+        let user = user.unwrap();
+        let mut created_by: Option<User> = None;
+        if user.created_by.is_some() {
+            let (x, _) = match get_user_by_id(&mut tx, &user.created_by.unwrap(), None).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return UserDetailResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "user_detail_api",
+                            "get created_by user",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            };
+            created_by = x
+        }
+        let mut updated_by: Option<User> = None;
+        if user.updated_by.is_some() {
+            let (x, _) = match get_user_by_id(&mut tx, &user.updated_by.unwrap(), None).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return UserDetailResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "user_detail_api",
+                            "get updated_by user",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            };
+            updated_by = x
+        }
+
+        let user_group_roles = match get_user_group_roles_by_user(&mut tx, &user).await {
+            Ok(val) => val,
+            Err(err) => {
+                return UserDetailResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "user_detail_api",
+                        "get_user_group_roles_by_user",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+        let mut group_roles: Vec<DetailGroupRole> = vec![];
+        for item in user_group_roles {
+            let mut role: Option<Role> = None;
+            if item.role_id.is_some() {
+                role = match get_role_by_id(&mut tx, &item.role_id.unwrap()).await {
+                    Ok(val) => val,
+                    Err(err) => {
+                        return UserDetailResponses::InternalServerError(Json(
+                            InternalServerErrorResponse::new(
+                                "route.user",
+                                "user_detail_api",
+                                "get role from user_group_roles",
+                                &err.to_string(),
+                            ),
+                        ))
+                    }
+                };
+            }
+            let mut group: Option<Group> = None;
+            if item.group_id.is_some() {
+                group = match get_group_by_id(&mut tx, &item.group_id.unwrap()).await {
+                    Ok(val) => val,
+                    Err(err) => {
+                        return UserDetailResponses::InternalServerError(Json(
+                            InternalServerErrorResponse::new(
+                                "route.user",
+                                "user_detail_api",
+                                "get group from user_role_groups",
+                                &err.to_string(),
+                            ),
+                        ))
+                    }
+                };
+            }
+            group_roles.push(DetailGroupRole {
+                role: role.map(|x| DetailRole {
+                    id: x.id.to_string(),
+                    role_name: x.role_name,
+                }),
+                group: group.map(|x| DetailGroup {
+                    id: x.id.to_string(),
+                    group_name: x.group_name,
+                }),
+            });
+        }
+
+        UserDetailResponses::Ok(Json(UserDetailResponse {
+            id: user.id.to_string(),
+            user_name: user.user_name,
+            is_active: user.is_active,
+            is_2faenabled: user.is_2faenabled,
+            created_date: datetime_to_string_opt(user.created_date),
+            updated_date: datetime_to_string_opt(user.updated_date),
+            user_profile: user_profile.map(|x| DetailUserProfile {
+                first_name: x.first_name,
+                last_name: x.last_name,
+                email: x.email,
+                address: x.address,
+            }),
+            created_by: created_by.map(|x| DetailCreatedOrUpdatedUser {
+                id: x.id.to_string(),
+                user_name: x.user_name,
+            }),
+            updated_by: updated_by.map(|x| DetailCreatedOrUpdatedUser {
+                id: x.id.to_string(),
+                user_name: x.user_name,
+            }),
+            group_roles,
+        }))
     }
 
     #[oai(path = "/user/", method = "post", tag = "ApiUserTags::User")]
@@ -239,14 +442,14 @@ impl ApiUser {
                     role_id: Some(role_id),
                 });
                 group_roles_res.push(DetailGroupRole {
-                    role: DetailRole {
+                    role: Some(DetailRole {
                         id: role.id.to_string(),
                         role_name: role.role_name,
-                    },
-                    group: DetailGroup {
+                    }),
+                    group: Some(DetailGroup {
                         id: group.id.to_string(),
                         group_name: group.group_name,
-                    },
+                    }),
                 });
             }
             if let Err(err) = upsert_user_group_roles(&mut tx, &new_user, &user_group_roles).await {

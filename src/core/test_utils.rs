@@ -57,14 +57,15 @@ pub async fn generate_test_user<C: ConnectionLike>(
     // create user on db
     sqlx::query(
         r#"
-        INSERT INTO public.user (id, user_name, password, is_active, created_date, updated_date)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO public.user (id, user_name, password, is_active, is_2faenabled, created_date, updated_date)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         "#,
     )
     .bind(user.id)
     .bind(&user.user_name)
     .bind(&user.password)
     .bind(user.is_active)
+    .bind(user.is_2faenabled)
     .bind(user.created_date)
     .bind(user.updated_date)
     .execute(&mut **db)

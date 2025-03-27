@@ -158,6 +158,22 @@ pub async fn create_user(
     Ok(())
 }
 
+pub async fn get_user_group_roles_by_user(
+    tx: &mut Transaction<'_, Postgres>,
+    user: &User,
+) -> anyhow::Result<Vec<UserGroupRoles>> {
+    Ok(sqlx::query_as(
+        format!(
+            "SELECT * FROM {} WHERE user_id = $1",
+            USER_GROUP_ROLES_TABLE_NAME
+        )
+        .as_str(),
+    )
+    .bind(user.id)
+    .fetch_all(&mut **tx)
+    .await?)
+}
+
 pub async fn upsert_user_group_roles(
     tx: &mut Transaction<'_, Postgres>,
     user: &User,

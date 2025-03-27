@@ -6,7 +6,9 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
-    core::{security::verify_hash_password, test_utils::generate_test_user},
+    core::{
+        security::verify_hash_password, test_utils::generate_test_user, utils::datetime_to_string,
+    },
     factory::{group::GroupFactory, role::RoleFactory},
     init_openapi_route,
     model::{
@@ -17,6 +19,67 @@ use crate::{
     settings::get_config,
     AppState,
 };
+
+#[sqlx::test]
+async fn test_user_detail_api(pool: PgPool) -> anyhow::Result<()> {
+    // Given
+    let mut config = get_config();
+    config.prefix = Some("/api".to_string());
+    let client = redis::Client::open(config.redis_url.clone()).unwrap();
+    let redis_pool = r2d2::Pool::builder().build(client).unwrap();
+    let app_state = Arc::new(AppState {
+        db: pool,
+        redis_conn: redis_pool,
+    });
+    let mut db = app_state.db.acquire().await?;
+    let mut redis_conn = app_state.redis_conn.get()?;
+    // let mut role_factory = RoleFactory::new();
+    // let role = role_factory.generate_one(&app_state.db, ()).await?;
+    // let mut group_factory = GroupFactory::new();
+    // let group = group_factory.generate_one(&app_state.db, ()).await?;
+    let test_user = generate_test_user(
+        &mut db,
+        &mut redis_conn,
+        config.clone(),
+        "test_user",
+        "password",
+    )
+    .await?;
+    let app = init_openapi_route(app_state.clone(), &config);
+    let cli = TestClient::new(app);
+
+    // When
+    let resp = cli
+        .get("/api/user/detail")
+        .header("authorization", format!("Bearer {}", test_user.token))
+        .query("id", &test_user.user.id.to_string())
+        .send()
+        .await;
+
+    // Expect
+    resp.assert_status_is_ok();
+    let user = test_user.user;
+    let user_profile = test_user.user_profile;
+    resp.assert_json(&json!({
+        "id": user.id.to_string(),
+        "user_name": user.user_name,
+        "is_active": user.is_active,
+        "is_2faenabled": user.is_2faenabled,
+        "created_by": Null,
+        "updated_by": Null,
+        "created_date": datetime_to_string(user.created_date.unwrap()),
+        "updated_date": datetime_to_string(user.updated_date.unwrap()),
+        "user_profile": {
+            "address": user_profile.address,
+            "email": user_profile.email,
+            "first_name": user_profile.first_name,
+            "last_name": user_profile.last_name
+        },
+        "group_roles": []
+    }))
+    .await;
+    Ok(())
+}
 
 #[sqlx::test]
 async fn test_create_user_api(pool: PgPool) -> anyhow::Result<()> {
