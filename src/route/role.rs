@@ -118,7 +118,7 @@ impl ApiRole {
         for item in data {
             let mut created_by: Option<User> = None;
             if let Some(created_by_id) = item.created_by {
-                (created_by, _) = match get_user_by_id(&mut tx, &created_by_id).await {
+                (created_by, _) = match get_user_by_id(&mut tx, &created_by_id, None).await {
                     Ok(val) => val,
                     Err(err) => {
                         return PaginateRoleResponses::InternalServerError(Json(
@@ -134,7 +134,7 @@ impl ApiRole {
             }
             let mut updated_by: Option<User> = None;
             if let Some(updated_by_id) = item.updated_by {
-                (updated_by, _) = match get_user_by_id(&mut tx, &updated_by_id).await {
+                (updated_by, _) = match get_user_by_id(&mut tx, &updated_by_id, None).await {
                     Ok(val) => val,
                     Err(err) => {
                         return PaginateRoleResponses::InternalServerError(Json(
@@ -254,7 +254,7 @@ impl ApiRole {
         for item in data {
             let mut created_by: Option<User> = None;
             if let Some(created_by_id) = item.created_by {
-                (created_by, _) = match get_user_by_id(&mut tx, &created_by_id).await {
+                (created_by, _) = match get_user_by_id(&mut tx, &created_by_id, None).await {
                     Ok(val) => val,
                     Err(err) => {
                         return RoleAllResponses::InternalServerError(Json(
@@ -270,7 +270,7 @@ impl ApiRole {
             }
             let mut updated_by: Option<User> = None;
             if let Some(updated_by_id) = item.updated_by {
-                (updated_by, _) = match get_user_by_id(&mut tx, &updated_by_id).await {
+                (updated_by, _) = match get_user_by_id(&mut tx, &updated_by_id, None).await {
                     Ok(val) => val,
                     Err(err) => {
                         return RoleAllResponses::InternalServerError(Json(
@@ -478,7 +478,7 @@ impl ApiRole {
         let data = data.unwrap();
         let mut created_by: Option<User> = None;
         if let Some(created_by_id) = data.created_by {
-            (created_by, _) = match get_user_by_id(&mut tx, &created_by_id).await {
+            (created_by, _) = match get_user_by_id(&mut tx, &created_by_id, None).await {
                 Ok(val) => val,
                 Err(err) => {
                     return RoleDetailResponses::InternalServerError(Json(
@@ -494,7 +494,7 @@ impl ApiRole {
         }
         let mut updated_by: Option<User> = None;
         if let Some(updated_by_id) = data.updated_by {
-            (updated_by, _) = match get_user_by_id(&mut tx, &updated_by_id).await {
+            (updated_by, _) = match get_user_by_id(&mut tx, &updated_by_id, None).await {
                 Ok(val) => val,
                 Err(err) => {
                     return RoleDetailResponses::InternalServerError(Json(

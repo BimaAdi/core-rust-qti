@@ -131,7 +131,7 @@ pub async fn get_user_from_token<C: ConnectionLike>(
         return Ok(None);
     }
     let user_id = Uuid::parse_str(&session.unwrap().user_id)?;
-    let (user, _) = get_user_by_id(tx, &user_id).await?;
+    let (user, _) = get_user_by_id(tx, &user_id, None).await?;
     Ok(user)
 }
 
@@ -168,6 +168,9 @@ mod test_generate_token {
             id,
             user_name: username.to_string(),
             password: hashed_password,
+            is_active: Some(true),
+            created_by: None,
+            updated_by: None,
             created_date: Some(now),
             updated_date: Some(now),
             deleted_date: None,
@@ -184,13 +187,14 @@ mod test_generate_token {
         // create user on db
         sqlx::query(
             r#"
-        INSERT INTO public.user (id, user_name, password, created_date, updated_date)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO public.user (id, user_name, password, is_active, created_date, updated_date)
+        VALUES ($1, $2, $3, $4, $5, $6)
         "#,
         )
         .bind(user.id)
         .bind(&user.user_name)
         .bind(&user.password)
+        .bind(user.is_active)
         .bind(user.created_date)
         .bind(user.updated_date)
         .execute(&mut *tx)
@@ -283,7 +287,7 @@ pub async fn get_user_from_refresh_token(
     }
     let claims = decode_refresh_token(refresh_token.unwrap().as_str(), config.jwt_secret)?;
     let user_id = Uuid::parse_str(&claims.id)?;
-    let (user, _) = get_user_by_id(tx, &user_id).await?;
+    let (user, _) = get_user_by_id(tx, &user_id, None).await?;
     Ok(user)
 }
 
@@ -316,6 +320,9 @@ mod test_generate_refresh_token {
             id,
             user_name: username.to_string(),
             password: hashed_password,
+            is_active: Some(true),
+            created_by: None,
+            updated_by: None,
             created_date: Some(now),
             updated_date: Some(now),
             deleted_date: None,
@@ -332,13 +339,14 @@ mod test_generate_refresh_token {
         // create user on db
         sqlx::query(
             r#"
-        INSERT INTO public.user (id, user_name, password, created_date, updated_date)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO public.user (id, user_name, password, is_active, created_date, updated_date)
+        VALUES ($1, $2, $3, $4, $5, $6)
         "#,
         )
         .bind(user.id)
         .bind(&user.user_name)
         .bind(&user.password)
+        .bind(user.is_active)
         .bind(user.created_date)
         .bind(user.updated_date)
         .execute(&mut *tx)

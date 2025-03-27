@@ -7,3 +7,6 @@ mod group_test;
 pub mod role;
 #[cfg(test)]
 mod role_test;
+pub mod user;
+#[cfg(test)]
+mod user_test;

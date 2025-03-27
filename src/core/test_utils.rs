@@ -37,7 +37,10 @@ pub async fn generate_test_user<C: ConnectionLike>(
         id,
         user_name: username.to_string(),
         password: hashed_password,
+        is_active: Some(true),
         is_2faenabled: Some(false),
+        created_by: None,
+        updated_by: None,
         created_date: Some(now),
         updated_date: Some(now),
         deleted_date: None,
@@ -54,13 +57,14 @@ pub async fn generate_test_user<C: ConnectionLike>(
     // create user on db
     sqlx::query(
         r#"
-        INSERT INTO public.user (id, user_name, password, created_date, updated_date)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO public.user (id, user_name, password, is_active, created_date, updated_date)
+        VALUES ($1, $2, $3, $4, $5, $6)
         "#,
     )
     .bind(user.id)
     .bind(&user.user_name)
     .bind(&user.password)
+    .bind(user.is_active)
     .bind(user.created_date)
     .bind(user.updated_date)
     .execute(&mut **db)

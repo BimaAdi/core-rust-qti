@@ -38,12 +38,15 @@ impl<T: Clone> UserFactory<T> {
         let data = data.generate_one();
         let data = (self.modifier_one)(&data, ext);
         sqlx::query(r#"
-        INSERT INTO public.user (id, user_name, password, is_2faenabled, created_date, updated_date, deleted_date) 
-        VALUES ($1, $2, $3, $4, $5, $6, $7)"#)
+        INSERT INTO public.user (id, user_name, password, is_active, is_2faenabled, created_by, updated_by, created_date, updated_date, deleted_date) 
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#)
         .bind(data.id)
         .bind(&data.user_name)
         .bind(&data.password)
+        .bind(data.is_active)
         .bind(data.is_2faenabled)
+        .bind(data.created_by)
+        .bind(data.updated_by)
         .bind(data.created_date)
         .bind(data.updated_date)
         .bind(data.deleted_date)
@@ -65,12 +68,15 @@ impl<T: Clone> UserFactory<T> {
         }
         let mut tx = db.begin().await?;
         for item in result.clone() {
-            sqlx::query(r#"INSERT INTO public.user (id, user_name, password, is_2faenabled, created_date, updated_date, deleted_date) 
-            VALUES ($1, $2, $3, $4, $5, $6, $7)"#)
+            sqlx::query(r#"INSERT INTO public.user (id, user_name, password, is_active, is_2faenabled, created_by, updated_by, created_date, updated_date, deleted_date) 
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#)
             .bind(item.id)
             .bind(&item.user_name)
             .bind(&item.password)
+            .bind(item.is_active)
             .bind(item.is_2faenabled)
+            .bind(item.created_by)
+            .bind(item.updated_by)
             .bind(item.created_date)
             .bind(item.updated_date)
             .bind(item.deleted_date)
@@ -81,12 +87,16 @@ impl<T: Clone> UserFactory<T> {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Default, Deserialize, Dummy, Clone)]
 struct UserDummy {
     pub id: Uuid,
     pub user_name: String,
     pub password: String,
+    pub is_active: Option<bool>,
     pub is_2faenabled: Option<bool>,
+    pub created_by: Option<Uuid>,
+    pub updated_by: Option<Uuid>,
     pub created_date: Option<DateTime<FixedOffset>>,
     pub updated_date: Option<DateTime<FixedOffset>>,
     pub deleted_date: Option<DateTime<FixedOffset>>,
@@ -103,7 +113,10 @@ impl UserDummy {
             id: dummy.id,
             user_name: dummy.user_name,
             password: dummy.password,
+            is_active: dummy.is_active,
             is_2faenabled: dummy.is_2faenabled,
+            created_by: None,
+            updated_by: None,
             created_date: dummy.created_date,
             updated_date: dummy.updated_date,
             deleted_date: dummy.deleted_date,
@@ -118,7 +131,10 @@ impl UserDummy {
                 id: dummy.id,
                 user_name: dummy.user_name,
                 password: dummy.password,
+                is_active: dummy.is_active,
                 is_2faenabled: dummy.is_2faenabled,
+                created_by: None,
+                updated_by: None,
                 created_date: dummy.created_date,
                 updated_date: dummy.updated_date,
                 deleted_date: dummy.deleted_date,
@@ -166,7 +182,10 @@ mod tests {
             id: ext.id,
             user_name: "test_user".to_string(),
             password: data.password.clone(),
+            is_active: Some(true),
             is_2faenabled: Some(false),
+            created_by: None,
+            updated_by: None,
             created_date: Some(ext.created_date),
             updated_date: Some(ext.updated_date),
             deleted_date: None,
@@ -184,12 +203,13 @@ mod tests {
             Uuid,
             String,
             String,
+            bool,
             Option<bool>,
             Option<DateTime<FixedOffset>>,
             Option<DateTime<FixedOffset>>,
             Option<DateTime<FixedOffset>>,
         ) = sqlx::query_as(
-            r#"SELECT id, user_name, password, is_2faenabled, 
+            r#"SELECT id, user_name, password, is_active, is_2faenabled, 
         created_date, updated_date, deleted_date 
         FROM public.user"#,
         )
@@ -198,10 +218,11 @@ mod tests {
         assert_eq!(res.0, ext.id);
         assert_eq!(res.1, "test_user".to_string());
         assert_ne!(res.2, "".to_string());
-        assert!(!res.3.unwrap());
-        assert!(res.4.is_some());
+        assert!(res.3);
+        assert!(!res.4.unwrap());
         assert!(res.5.is_some());
-        assert!(res.6.is_none());
+        assert!(res.6.is_some());
+        assert!(res.7.is_none());
         Ok(())
     }
 
@@ -235,7 +256,10 @@ mod tests {
             id: data.id,
             user_name: data.user_name.clone(),
             password: data.password.clone(),
+            is_active: Some(true),
             is_2faenabled: Some(false),
+            created_by: None,
+            updated_by: None,
             created_date: Some(ext.created_date),
             updated_date: Some(ext.updated_date),
             deleted_date: is_deleted(idx % 2 == 0),
@@ -253,12 +277,13 @@ mod tests {
             Uuid,
             String,
             String,
+            bool,
             Option<bool>,
             Option<DateTime<FixedOffset>>,
             Option<DateTime<FixedOffset>>,
             Option<DateTime<FixedOffset>>,
         )> = sqlx::query_as(
-            r#"SELECT id, user_name, password, is_2faenabled, 
+            r#"SELECT id, user_name, password, is_active, is_2faenabled, 
         created_date, updated_date, deleted_date
         FROM public.user"#,
         )
@@ -266,12 +291,13 @@ mod tests {
         .await?;
         assert_eq!(res.len(), 5);
         for (idx, item) in res.iter().enumerate() {
-            assert!(item.4.is_some());
+            assert!(item.3);
             assert!(item.5.is_some());
+            assert!(item.6.is_some());
             if idx % 2 == 0 {
-                assert!(item.6.is_some());
+                assert!(item.7.is_some());
             } else {
-                assert!(item.6.is_none())
+                assert!(item.7.is_none())
             }
         }
         Ok(())

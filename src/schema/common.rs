@@ -36,6 +36,11 @@ impl Default for UnauthorizedResponse {
 }
 
 #[derive(Object, Debug)]
+pub struct ForbiddenResponse {
+    pub message: String,
+}
+
+#[derive(Object, Debug)]
 pub struct NotFoundResponse {
     pub message: String,
 }

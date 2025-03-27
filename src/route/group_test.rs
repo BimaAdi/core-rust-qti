@@ -81,11 +81,11 @@ async fn test_paginate_group_api(pool: PgPool) -> anyhow::Result<()> {
     for item in roles {
         let mut created_by: Option<User> = None;
         if let Some(created_by_id) = item.created_by {
-            (created_by, _) = get_user_by_id(&mut tx, &created_by_id).await?;
+            (created_by, _) = get_user_by_id(&mut tx, &created_by_id, None).await?;
         }
         let mut updated_by: Option<User> = None;
         if let Some(updated_by_id) = item.updated_by {
-            (updated_by, _) = get_user_by_id(&mut tx, &updated_by_id).await?;
+            (updated_by, _) = get_user_by_id(&mut tx, &updated_by_id, None).await?;
         }
         results.push(DetailGroupPagination {
             id: item.id.to_string(),
@@ -179,11 +179,11 @@ async fn test_get_all_group_api(pool: PgPool) -> anyhow::Result<()> {
     for item in roles {
         let mut created_by: Option<User> = None;
         if let Some(created_by_id) = item.created_by {
-            (created_by, _) = get_user_by_id(&mut tx, &created_by_id).await?;
+            (created_by, _) = get_user_by_id(&mut tx, &created_by_id, None).await?;
         }
         let mut updated_by: Option<User> = None;
         if let Some(updated_by_id) = item.updated_by {
-            (updated_by, _) = get_user_by_id(&mut tx, &updated_by_id).await?;
+            (updated_by, _) = get_user_by_id(&mut tx, &updated_by_id, None).await?;
         }
         results.push(GroupAllResponse {
             id: item.id.to_string(),
