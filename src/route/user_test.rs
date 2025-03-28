@@ -297,3 +297,148 @@ async fn test_create_user_api(pool: PgPool) -> anyhow::Result<()> {
     assert_eq!(user_group_roles[0].group_id, Some(group.id));
     Ok(())
 }
+
+#[sqlx::test]
+async fn test_user_update_api(pool: PgPool) -> anyhow::Result<()> {
+    // Given
+    let mut config = get_config();
+    config.prefix = Some("/api".to_string());
+    let client = redis::Client::open(config.redis_url.clone()).unwrap();
+    let redis_pool = r2d2::Pool::builder().build(client).unwrap();
+    let app_state = Arc::new(AppState {
+        db: pool,
+        redis_conn: redis_pool,
+    });
+    let mut db = app_state.db.acquire().await?;
+    let mut redis_conn = app_state.redis_conn.get()?;
+    let test_user = generate_test_user(
+        &mut db,
+        &mut redis_conn,
+        config.clone(),
+        "test_user",
+        "password",
+    )
+    .await?;
+    let user =
+        generate_test_user(&mut db, &mut redis_conn, config.clone(), "user", "password").await?;
+    let mut role_factory = RoleFactory::new();
+    let role = role_factory.generate_one(&app_state.db, ()).await?;
+    let mut group_factory = GroupFactory::new();
+    let group = group_factory.generate_one(&app_state.db, ()).await?;
+    let app = init_openapi_route(app_state.clone(), &config);
+    let cli = TestClient::new(app);
+
+    // When
+    let resp = cli
+        .put("/api/user")
+        .header("authorization", format!("Bearer {}", test_user.token))
+        .query("id", &user.user.id.to_string())
+        .body_json(&json!({
+            "first_name": "first",
+            "last_name": "last",
+            "email": "email@local.com",
+            "is_active": true,
+            "password": "password",
+            "user_name": "user_name",
+            "address": Null,
+            "group_roles": [
+                {
+                    "group_id": group.id.to_string(),
+                    "role_id": role.id.to_string(),
+                }
+            ]
+        }))
+        .send()
+        .await;
+
+    // Expect
+    resp.assert_status_is_ok();
+    let user: User = sqlx::query_as(
+        format!(
+            r#"SELECT * FROM {}
+        WHERE id = $1"#,
+            TABLE_NAME
+        )
+        .as_str(),
+    )
+    .bind(&user.user.id)
+    .fetch_one(&mut *db)
+    .await?;
+    assert_eq!(user.user_name, "user_name".to_string());
+    assert_eq!(user.is_active, Some(true));
+    let user_profile: UserProfile = sqlx::query_as(
+        format!(
+            r#"SELECT * FROM {}
+        WHERE user_id = $1"#,
+            USER_PROFILE_TABLE_NAME
+        )
+        .as_str(),
+    )
+    .bind(&user.id)
+    .fetch_one(&mut *db)
+    .await?;
+    assert_eq!(user_profile.first_name, Some("first".to_string()));
+    assert_eq!(user_profile.last_name, Some("last".to_string()));
+    assert_eq!(user_profile.email, Some("email@local.com".to_string()));
+    // user_group_roles
+    let user_group_roles: Vec<UserGroupRoles> = sqlx::query_as(
+        format!(
+            r#"SELECT * FROM {} WHERE user_id = $1"#,
+            USER_GROUP_ROLES_TABLE_NAME
+        )
+        .as_str(),
+    )
+    .bind(&user.id)
+    .fetch_all(&mut *db)
+    .await?;
+    assert_eq!(user_group_roles.len(), 1);
+    assert_eq!(user_group_roles[0].role_id, Some(role.id));
+    assert_eq!(user_group_roles[0].group_id, Some(group.id));
+    Ok(())
+}
+
+#[sqlx::test]
+async fn test_user_delete_api(pool: PgPool) -> anyhow::Result<()> {
+    // Given
+    let mut config = get_config();
+    config.prefix = Some("/api".to_string());
+    let client = redis::Client::open(config.redis_url.clone()).unwrap();
+    let redis_pool = r2d2::Pool::builder().build(client).unwrap();
+    let app_state = Arc::new(AppState {
+        db: pool,
+        redis_conn: redis_pool,
+    });
+    let mut db = app_state.db.acquire().await?;
+    let mut redis_conn = app_state.redis_conn.get()?;
+    let test_user = generate_test_user(
+        &mut db,
+        &mut redis_conn,
+        config.clone(),
+        "test_user",
+        "password",
+    )
+    .await?;
+    let mut user_factory = UserFactory::new();
+    let user = user_factory.generate_one(&app_state.db, ()).await?;
+    let app = init_openapi_route(app_state.clone(), &config);
+    let cli = TestClient::new(app);
+
+    // When
+    let resp = cli
+        .delete("/api/user")
+        .header("authorization", format!("Bearer {}", test_user.token))
+        .query("id", &user.id.to_string())
+        .send()
+        .await;
+
+    // Expect
+    resp.assert_status(StatusCode::NO_CONTENT);
+    let user: User =
+        sqlx::query_as(format!(r#"SELECT * FROM {} WHERE id = $1"#, TABLE_NAME).as_str())
+            .bind(&user.id)
+            .fetch_one(&mut *db)
+            .await?;
+    assert!(user.deleted_date.is_some());
+    assert_eq!(user.updated_by, Some(test_user.user.id));
+    Ok(())
+}

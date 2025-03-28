@@ -170,7 +170,7 @@ pub struct UserUpdateRequest {
 pub struct UserUpdateResponse {
     pub id: String,
     pub user_name: String,
-    pub is_active: bool,
+    pub is_active: Option<bool>,
     pub group_roles: Vec<DetailGroupRole>,
     pub user_profile: Option<DetailUserProfile>,
 }
@@ -178,7 +178,7 @@ pub struct UserUpdateResponse {
 #[derive(ApiResponse)]
 pub enum UserUpdateResponses {
     #[oai(status = 200)]
-    Created(Json<UserUpdateResponse>),
+    Ok(Json<UserUpdateResponse>),
 
     #[oai(status = 400)]
     BadRequest(Json<BadRequestResponse>),

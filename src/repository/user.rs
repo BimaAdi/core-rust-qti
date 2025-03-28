@@ -1,3 +1,4 @@
+use chrono::{DateTime, FixedOffset};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
@@ -153,6 +154,77 @@ pub async fn create_user(
     .bind(&user_profile.last_name)
     .bind(&user_profile.address)
     .bind(&user_profile.email)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+pub async fn update_user(
+    tx: &mut Transaction<'_, Postgres>,
+    user: &mut User,
+    user_profile: &UserProfile,
+    request_user: &User,
+    now: &DateTime<FixedOffset>,
+) -> anyhow::Result<()> {
+    user.updated_by = Some(request_user.id);
+    user.updated_date = Some(*now);
+    sqlx::query(
+        format!(
+            r#"UPDATE {} 
+            SET user_name = $1, password = $2, is_active = $3, is_2faenabled = $4, updated_by = $5, 
+            updated_date = $6
+            WHERE id = $7"#,
+            TABLE_NAME
+        )
+        .as_str(),
+    )
+    .bind(&user.user_name)
+    .bind(&user.password)
+    .bind(user.is_active)
+    .bind(user.is_2faenabled)
+    .bind(request_user.id)
+    .bind(now)
+    .bind(user.id)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        format!(
+            r#"UPDATE {}
+            SET first_name = $1, last_name = $2, address = $3, email = $4
+            WHERE user_id = $5"#,
+            USER_PROFILE_TABLE_NAME
+        )
+        .as_str(),
+    )
+    .bind(&user_profile.first_name)
+    .bind(&user_profile.last_name)
+    .bind(&user_profile.address)
+    .bind(&user_profile.email)
+    .bind(user.id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+pub async fn soft_delete_user(
+    tx: &mut Transaction<'_, Postgres>,
+    user: &mut User,
+    request_user: &User,
+    now: &DateTime<FixedOffset>,
+) -> anyhow::Result<()> {
+    user.updated_by = Some(request_user.id);
+    user.deleted_date = Some(*now);
+    sqlx::query(
+        format!(
+            r#"UPDATE {} SET updated_by = $1, deleted_date = $2
+            WHERE id = $3"#,
+            TABLE_NAME
+        )
+        .as_str(),
+    )
+    .bind(request_user.id)
+    .bind(now)
+    .bind(user.id)
     .execute(&mut **tx)
     .await?;
     Ok(())

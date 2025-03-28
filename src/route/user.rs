@@ -19,7 +19,7 @@ use crate::{
         role::get_role_by_id,
         user::{
             create_user, get_all_user, get_user_by_id, get_user_group_roles_by_user,
-            upsert_user_group_roles,
+            soft_delete_user, update_user, upsert_user_group_roles,
         },
     },
     schema::{
@@ -34,7 +34,7 @@ use crate::{
             GetAllUserResponses, GetPaginateUserResponses, ResetPasswordRequest,
             ResetPasswordResponses, UserCreateRequest, UserCreateResponse, UserCreateResponses,
             UserDeleteResponses, UserDetailResponse, UserDetailResponses, UserUpdateRequest,
-            UserUpdateResponses,
+            UserUpdateResponse, UserUpdateResponses,
         },
     },
     AppState,
@@ -707,22 +707,332 @@ impl ApiUser {
     #[oai(path = "/user/", method = "put", tag = "ApiUserTags::User")]
     async fn user_update_api(
         &self,
-        Query(_id): Query<String>,
-        Json(_json): Json<UserUpdateRequest>,
-        _state: Data<&Arc<AppState>>,
-        _auth: BearerAuthorization,
+        Query(id): Query<String>,
+        Json(json): Json<UserUpdateRequest>,
+        state: Data<&Arc<AppState>>,
+        auth: BearerAuthorization,
     ) -> UserUpdateResponses {
-        todo!()
+        // Begin db transaction
+        let mut tx = match state.db.begin().await {
+            Ok(val) => val,
+            Err(err) => {
+                return UserUpdateResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "user_update_api",
+                        "begin transaction",
+                        &err.to_string(),
+                    ),
+                ));
+            }
+        };
+
+        // get redis conn from pool
+        let mut redis_conn = match state.redis_conn.get() {
+            Ok(val) => val,
+            Err(err) => {
+                return UserUpdateResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "user_update_api",
+                        "get redis pool connection",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+
+        // Validate user token
+        let jwt_token = auth.0.token;
+        let request_user =
+            match get_user_from_token(&mut tx, &mut redis_conn, jwt_token.clone()).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return UserUpdateResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "user_update_api",
+                            "get user from token",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            };
+        if request_user.is_none() {
+            return UserUpdateResponses::Unauthorized(Json(UnauthorizedResponse::default()));
+        }
+        let request_user = request_user.unwrap();
+        // get user on db
+        let id = match Uuid::parse_str(&id) {
+            Ok(val) => val,
+            Err(_) => {
+                return UserUpdateResponses::NotFound(Json(NotFoundResponse {
+                    message: format!("user with id = {} not found", &id),
+                }))
+            }
+        };
+        let (user, user_profile) = match get_user_by_id(&mut tx, &id, None).await {
+            Ok(val) => val,
+            Err(err) => {
+                return UserUpdateResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "user_update_api",
+                        "get_user_by_id",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+        if user.is_none() || user_profile.is_none() {
+            return UserUpdateResponses::NotFound(Json(NotFoundResponse {
+                message: format!("user with id = {} not found", &id),
+            }));
+        }
+        // Update user and user_profile
+        let now = Local::now().fixed_offset();
+        let mut user = user.unwrap();
+        user.user_name = json.user_name;
+        user.password = hash_password(&user.password).unwrap();
+        user.is_active = Some(json.is_active);
+        let mut user_profile = user_profile.unwrap();
+        user_profile.first_name = json.first_name;
+        user_profile.last_name = json.last_name;
+        user_profile.email = json.email;
+        user_profile.address = json.address;
+        if let Err(err) = update_user(&mut tx, &mut user, &user_profile, &request_user, &now).await
+        {
+            return UserUpdateResponses::InternalServerError(Json(
+                InternalServerErrorResponse::new(
+                    "route.user",
+                    "user_update_api",
+                    "update_user",
+                    &err.to_string(),
+                ),
+            ));
+        }
+        // Upsert user_group_roles
+        let mut user_group_roles: Vec<UserGroupRoles> = vec![];
+        let mut group_roles_res: Vec<DetailGroupRole> = vec![];
+        if json.group_roles.is_some() {
+            let group_roles = json.group_roles.unwrap();
+            for item in group_roles {
+                let role_id = match Uuid::parse_str(&item.role_id) {
+                    Ok(val) => val,
+                    Err(_) => {
+                        return UserUpdateResponses::BadRequest(Json(BadRequestResponse {
+                            message: format!("role with id = {} not found", &item.role_id),
+                        }))
+                    }
+                };
+                let role = match get_role_by_id(&mut tx, &role_id).await {
+                    Ok(val) => val,
+                    Err(err) => {
+                        return UserUpdateResponses::InternalServerError(Json(
+                            InternalServerErrorResponse::new(
+                                "route.user",
+                                "user_update_api",
+                                "check role",
+                                &err.to_string(),
+                            ),
+                        ));
+                    }
+                };
+                if role.is_none() {
+                    return UserUpdateResponses::BadRequest(Json(BadRequestResponse {
+                        message: format!("role with id = {} not found", &item.role_id),
+                    }));
+                }
+                let role = role.unwrap();
+                let group_id = match Uuid::parse_str(&item.group_id) {
+                    Ok(val) => val,
+                    Err(_) => {
+                        return UserUpdateResponses::BadRequest(Json(BadRequestResponse {
+                            message: format!("group with id = {} not found", &item.group_id),
+                        }))
+                    }
+                };
+                let group = match get_group_by_id(&mut tx, &group_id).await {
+                    Ok(val) => val,
+                    Err(err) => {
+                        return UserUpdateResponses::InternalServerError(Json(
+                            InternalServerErrorResponse::new(
+                                "route.user",
+                                "user_update_api",
+                                "check group",
+                                &err.to_string(),
+                            ),
+                        ));
+                    }
+                };
+                if group.is_none() {
+                    return UserUpdateResponses::BadRequest(Json(BadRequestResponse {
+                        message: format!("group with id = {} not found", &item.group_id),
+                    }));
+                }
+                let group = group.unwrap();
+                user_group_roles.push(UserGroupRoles {
+                    id: Uuid::now_v7(),
+                    user_id: Some(user.id),
+                    group_id: Some(group_id),
+                    role_id: Some(role_id),
+                });
+                group_roles_res.push(DetailGroupRole {
+                    role: Some(DetailRole {
+                        id: role.id.to_string(),
+                        role_name: role.role_name,
+                    }),
+                    group: Some(DetailGroup {
+                        id: group.id.to_string(),
+                        group_name: group.group_name,
+                    }),
+                });
+            }
+            if let Err(err) = upsert_user_group_roles(&mut tx, &user, &user_group_roles).await {
+                return UserUpdateResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "user_update_api",
+                        "upsert_user_group_roles",
+                        &err.to_string(),
+                    ),
+                ));
+            }
+        }
+
+        if let Err(err) = tx.commit().await {
+            return UserUpdateResponses::InternalServerError(Json(
+                InternalServerErrorResponse::new(
+                    "route.user",
+                    "user_update_api",
+                    "commit to database",
+                    &err.to_string(),
+                ),
+            ));
+        }
+
+        UserUpdateResponses::Ok(Json(UserUpdateResponse {
+            id: user.id.to_string(),
+            user_name: user.user_name,
+            is_active: user.is_active,
+            group_roles: group_roles_res,
+            user_profile: Some(DetailUserProfile {
+                first_name: user_profile.first_name,
+                last_name: user_profile.last_name,
+                email: user_profile.email,
+                address: user_profile.address,
+            }),
+        }))
     }
 
     #[oai(path = "/user/", method = "delete", tag = "ApiUserTags::User")]
     async fn user_delete_api(
         &self,
-        Query(_id): Query<String>,
-        _state: Data<&Arc<AppState>>,
-        _auth: BearerAuthorization,
+        Query(id): Query<String>,
+        state: Data<&Arc<AppState>>,
+        auth: BearerAuthorization,
     ) -> UserDeleteResponses {
-        todo!()
+        // Begin db transaction
+        let mut tx = match state.db.begin().await {
+            Ok(val) => val,
+            Err(err) => {
+                return UserDeleteResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "user_delete_api",
+                        "begin transaction",
+                        &err.to_string(),
+                    ),
+                ));
+            }
+        };
+
+        // get redis conn from pool
+        let mut redis_conn = match state.redis_conn.get() {
+            Ok(val) => val,
+            Err(err) => {
+                return UserDeleteResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "user_delete_api",
+                        "get redis pool connection",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+
+        // Validate user token
+        let jwt_token = auth.0.token;
+        let request_user =
+            match get_user_from_token(&mut tx, &mut redis_conn, jwt_token.clone()).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return UserDeleteResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "user_delete_api",
+                            "get user from token",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            };
+        if request_user.is_none() {
+            return UserDeleteResponses::Unauthorized(Json(UnauthorizedResponse::default()));
+        }
+        let request_user = request_user.unwrap();
+        // get user on db
+        let id = match Uuid::parse_str(&id) {
+            Ok(val) => val,
+            Err(_) => {
+                return UserDeleteResponses::NotFound(Json(NotFoundResponse {
+                    message: format!("user with id = {} not found", &id),
+                }))
+            }
+        };
+        let (user, _) = match get_user_by_id(&mut tx, &id, None).await {
+            Ok(val) => val,
+            Err(err) => {
+                return UserDeleteResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "user_delete_api",
+                        "get_user_by_id",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+        if user.is_none() {
+            return UserDeleteResponses::NotFound(Json(NotFoundResponse {
+                message: format!("user with id = {} not found", &id),
+            }));
+        }
+        // soft delete user
+        let mut user = user.unwrap();
+        let now = Local::now().fixed_offset();
+        if let Err(err) = soft_delete_user(&mut tx, &mut user, &request_user, &now).await {
+            return UserDeleteResponses::InternalServerError(Json(
+                InternalServerErrorResponse::new(
+                    "route.user",
+                    "user_delete_api",
+                    "soft_delete_user",
+                    &err.to_string(),
+                ),
+            ));
+        }
+        if let Err(err) = tx.commit().await {
+            return UserDeleteResponses::InternalServerError(Json(
+                InternalServerErrorResponse::new(
+                    "route.user",
+                    "user_delete_api",
+                    "commit to database",
+                    &err.to_string(),
+                ),
+            ));
+        }
+        UserDeleteResponses::NoContent
     }
 
     #[oai(
