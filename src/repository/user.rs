@@ -14,7 +14,7 @@ pub async fn get_all_user(
     tx: &mut Transaction<'_, Postgres>,
     page: u32,
     page_size: u32,
-    search: Option<&str>,
+    search: Option<String>,
     exclude_soft_delete: Option<bool>,
 ) -> anyhow::Result<(Vec<User>, u32, u32)> {
     let mut binds: Vec<SqlxBinds> = vec![];

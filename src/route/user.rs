@@ -18,20 +18,23 @@ use crate::{
         group::get_group_by_id,
         role::get_role_by_id,
         user::{
-            create_user, get_user_by_id, get_user_group_roles_by_user, upsert_user_group_roles,
+            create_user, get_all_user, get_user_by_id, get_user_group_roles_by_user,
+            upsert_user_group_roles,
         },
     },
     schema::{
         common::{
-            BadRequestResponse, InternalServerErrorResponse, NotFoundResponse, UnauthorizedResponse,
+            BadRequestResponse, InternalServerErrorResponse, NotFoundResponse, PaginateResponse,
+            UnauthorizedResponse,
         },
         user::{
             AddUserGroupRoleRequest, AddUserGroupRoleResponses, ChangeStatusRequest,
             ChangeStatusResponses, DeleteUserGroupRoleResponses, DetailCreatedOrUpdatedUser,
-            DetailGroup, DetailGroupRole, DetailRole, DetailUserProfile, GetAllUserResponses,
-            GetPaginateUserResponses, ResetPasswordRequest, ResetPasswordResponses,
-            UserCreateRequest, UserCreateResponse, UserCreateResponses, UserDeleteResponses,
-            UserDetailResponse, UserDetailResponses, UserUpdateRequest, UserUpdateResponses,
+            DetailGroup, DetailGroupRole, DetailRole, DetailUser, DetailUserProfile,
+            GetAllUserResponses, GetPaginateUserResponses, ResetPasswordRequest,
+            ResetPasswordResponses, UserCreateRequest, UserCreateResponse, UserCreateResponses,
+            UserDeleteResponses, UserDetailResponse, UserDetailResponses, UserUpdateRequest,
+            UserUpdateResponses,
         },
     },
     AppState,
@@ -49,25 +52,237 @@ impl ApiUser {
     #[oai(path = "/user/", method = "get", tag = "ApiUserTags::User")]
     async fn get_paginate_user_api(
         &self,
-        Query(_page): Query<Option<u32>>,
-        Query(_page_size): Query<Option<u32>>,
-        Query(_search): Query<Option<String>>,
-        _state: Data<&Arc<AppState>>,
-        _auth: BearerAuthorization,
+        Query(page): Query<Option<u32>>,
+        Query(page_size): Query<Option<u32>>,
+        Query(search): Query<Option<String>>,
+        state: Data<&Arc<AppState>>,
+        auth: BearerAuthorization,
     ) -> GetPaginateUserResponses {
-        todo!()
+        // Begin db transaction
+        let mut tx = match state.db.begin().await {
+            Ok(val) => val,
+            Err(err) => {
+                return GetPaginateUserResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "get_paginate_user_api",
+                        "begin transaction",
+                        &err.to_string(),
+                    ),
+                ));
+            }
+        };
+
+        // get redis conn from pool
+        let mut redis_conn = match state.redis_conn.get() {
+            Ok(val) => val,
+            Err(err) => {
+                return GetPaginateUserResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "get_paginate_user_api",
+                        "get redis pool connection",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+
+        // Validate user token
+        let jwt_token = auth.0.token;
+        let request_user =
+            match get_user_from_token(&mut tx, &mut redis_conn, jwt_token.clone()).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return GetPaginateUserResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "get_paginate_user_api",
+                            "get user from token",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            };
+        if request_user.is_none() {
+            return GetPaginateUserResponses::Unauthorized(Json(UnauthorizedResponse::default()));
+        }
+
+        let page = page.unwrap_or(1);
+        let page_size = page_size.unwrap_or(10);
+        let (data, counts, page_count) =
+            match get_all_user(&mut tx, page, page_size, search, None).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return GetPaginateUserResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "get_paginate_user_api",
+                            "get_all_user",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            };
+
+        let mut results: Vec<DetailUser> = vec![];
+        for item in data {
+            let mut created_by: Option<User> = None;
+            if item.created_by.is_some() {
+                (created_by, _) =
+                    match get_user_by_id(&mut tx, &item.created_by.unwrap(), None).await {
+                        Ok(val) => val,
+                        Err(err) => {
+                            return GetPaginateUserResponses::InternalServerError(Json(
+                                InternalServerErrorResponse::new(
+                                    "route.user",
+                                    "get_paginate_user_api",
+                                    "get_user_detail for created_by",
+                                    &err.to_string(),
+                                ),
+                            ))
+                        }
+                    };
+            }
+            results.push(DetailUser {
+                id: item.id.to_string(),
+                user_name: item.user_name,
+                is_active: item.is_active,
+                is_2faenabled: item.is_2faenabled,
+                created_date: datetime_to_string_opt(item.created_date),
+                updated_date: datetime_to_string_opt(item.updated_date),
+                created_by: created_by.map(|x| DetailCreatedOrUpdatedUser {
+                    id: x.id.to_string(),
+                    user_name: x.user_name,
+                }),
+            });
+        }
+
+        GetPaginateUserResponses::Ok(Json(PaginateResponse {
+            counts,
+            page,
+            page_count,
+            page_size,
+            results,
+        }))
     }
 
     #[oai(path = "/user/all/", method = "get", tag = "ApiUserTags::User")]
     async fn get_all_user_api(
         &self,
-        Query(_page): Query<Option<u32>>,
-        Query(_page_size): Query<Option<u32>>,
-        Query(_search): Query<Option<String>>,
-        _state: Data<&Arc<AppState>>,
-        _auth: BearerAuthorization,
+        Query(page): Query<Option<u32>>,
+        Query(page_size): Query<Option<u32>>,
+        Query(search): Query<Option<String>>,
+        state: Data<&Arc<AppState>>,
+        auth: BearerAuthorization,
     ) -> GetAllUserResponses {
-        todo!()
+        // Begin db transaction
+        let mut tx = match state.db.begin().await {
+            Ok(val) => val,
+            Err(err) => {
+                return GetAllUserResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "get_all_user_api",
+                        "begin transaction",
+                        &err.to_string(),
+                    ),
+                ));
+            }
+        };
+
+        // get redis conn from pool
+        let mut redis_conn = match state.redis_conn.get() {
+            Ok(val) => val,
+            Err(err) => {
+                return GetAllUserResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "get_all_user_api",
+                        "get redis pool connection",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+
+        // Validate user token
+        let jwt_token = auth.0.token;
+        let request_user =
+            match get_user_from_token(&mut tx, &mut redis_conn, jwt_token.clone()).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return GetAllUserResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "get_all_user_api",
+                            "get user from token",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            };
+        if request_user.is_none() {
+            return GetAllUserResponses::Unauthorized(Json(UnauthorizedResponse::default()));
+        }
+
+        let page = page.unwrap_or(1);
+        let page_size = page_size.unwrap_or(10);
+        let (data, counts, page_count) =
+            match get_all_user(&mut tx, page, page_size, search, None).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return GetAllUserResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "get_all_user_api",
+                            "get_all_user",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            };
+
+        let mut results: Vec<DetailUser> = vec![];
+        for item in data {
+            let mut created_by: Option<User> = None;
+            if item.created_by.is_some() {
+                (created_by, _) =
+                    match get_user_by_id(&mut tx, &item.created_by.unwrap(), None).await {
+                        Ok(val) => val,
+                        Err(err) => {
+                            return GetAllUserResponses::InternalServerError(Json(
+                                InternalServerErrorResponse::new(
+                                    "route.user",
+                                    "get_all_user_api",
+                                    "get_user_detail for created_by",
+                                    &err.to_string(),
+                                ),
+                            ))
+                        }
+                    };
+            }
+            results.push(DetailUser {
+                id: item.id.to_string(),
+                user_name: item.user_name,
+                is_active: item.is_active,
+                is_2faenabled: item.is_2faenabled,
+                created_date: datetime_to_string_opt(item.created_date),
+                updated_date: datetime_to_string_opt(item.updated_date),
+                created_by: created_by.map(|x| DetailCreatedOrUpdatedUser {
+                    id: x.id.to_string(),
+                    user_name: x.user_name,
+                }),
+            });
+        }
+
+        GetAllUserResponses::Ok(Json(PaginateResponse {
+            counts,
+            page,
+            page_count,
+            page_size,
+            results,
+        }))
     }
 
     #[oai(path = "/user/detail/", method = "get", tag = "ApiUserTags::User")]

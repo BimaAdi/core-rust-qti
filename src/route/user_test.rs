@@ -1,15 +1,20 @@
 use std::sync::Arc;
 
 use poem::{http::StatusCode, test::TestClient};
-use serde_json::{json, Value::Null};
+use serde_json::{
+    json,
+    Value::{self, Null},
+};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
     core::{
-        security::verify_hash_password, test_utils::generate_test_user, utils::datetime_to_string,
+        security::verify_hash_password,
+        test_utils::generate_test_user,
+        utils::{datetime_to_string, datetime_to_string_opt},
     },
-    factory::{group::GroupFactory, role::RoleFactory},
+    factory::{group::GroupFactory, role::RoleFactory, user::UserFactory},
     init_openapi_route,
     model::{
         user::{User, TABLE_NAME},
@@ -19,6 +24,122 @@ use crate::{
     settings::get_config,
     AppState,
 };
+
+#[sqlx::test]
+async fn test_paginate_user_api(pool: PgPool) -> anyhow::Result<()> {
+    // Given
+    let mut config = get_config();
+    config.prefix = Some("/api".to_string());
+    let client = redis::Client::open(config.redis_url.clone()).unwrap();
+    let redis_pool = r2d2::Pool::builder().build(client).unwrap();
+    let app_state = Arc::new(AppState {
+        db: pool,
+        redis_conn: redis_pool,
+    });
+    let mut db = app_state.db.acquire().await?;
+    let mut redis_conn = app_state.redis_conn.get()?;
+    let test_user = generate_test_user(
+        &mut db,
+        &mut redis_conn,
+        config.clone(),
+        "test_user",
+        "password",
+    )
+    .await?;
+    let mut user_factory = UserFactory::new();
+    user_factory.generate_many(&app_state.db, 10, ()).await?;
+    let app = init_openapi_route(app_state.clone(), &config);
+    let cli = TestClient::new(app);
+
+    // When
+    let resp = cli
+        .get("/api/user")
+        .header("authorization", format!("Bearer {}", test_user.token))
+        .send()
+        .await;
+
+    // Expect
+    resp.assert_status_is_ok();
+    let data: Vec<User> =
+        sqlx::query_as("SELECT * FROM public.user ORDER BY updated_date DESC LIMIT 10")
+            .fetch_all(&mut *db)
+            .await?;
+    resp.assert_json(&json!({
+        "counts": 11,
+        "page": 1,
+        "page_count": 2,
+        "page_size": 10,
+        "results": data.iter().map(|x| json!({
+            "id": x.id.to_string(),
+            "user_name": x.user_name,
+            "is_active": x.is_active,
+            "is_2faenabled": x.is_2faenabled,
+            "created_date": datetime_to_string_opt(x.created_date),
+            "updated_date": datetime_to_string_opt(x.updated_date),
+            "created_by": Null
+        })).collect::<Vec<Value>>()
+    }))
+    .await;
+    Ok(())
+}
+
+#[sqlx::test]
+async fn test_get_all_user_api(pool: PgPool) -> anyhow::Result<()> {
+    // Given
+    let mut config = get_config();
+    config.prefix = Some("/api".to_string());
+    let client = redis::Client::open(config.redis_url.clone()).unwrap();
+    let redis_pool = r2d2::Pool::builder().build(client).unwrap();
+    let app_state = Arc::new(AppState {
+        db: pool,
+        redis_conn: redis_pool,
+    });
+    let mut db = app_state.db.acquire().await?;
+    let mut redis_conn = app_state.redis_conn.get()?;
+    let test_user = generate_test_user(
+        &mut db,
+        &mut redis_conn,
+        config.clone(),
+        "test_user",
+        "password",
+    )
+    .await?;
+    let mut user_factory = UserFactory::new();
+    user_factory.generate_many(&app_state.db, 10, ()).await?;
+    let app = init_openapi_route(app_state.clone(), &config);
+    let cli = TestClient::new(app);
+
+    // When
+    let resp = cli
+        .get("/api/user/all")
+        .header("authorization", format!("Bearer {}", test_user.token))
+        .send()
+        .await;
+
+    // Expect
+    resp.assert_status_is_ok();
+    let data: Vec<User> =
+        sqlx::query_as("SELECT * FROM public.user ORDER BY updated_date DESC LIMIT 10")
+            .fetch_all(&mut *db)
+            .await?;
+    resp.assert_json(&json!({
+        "counts": 11,
+        "page": 1,
+        "page_count": 2,
+        "page_size": 10,
+        "results": data.iter().map(|x| json!({
+            "id": x.id.to_string(),
+            "user_name": x.user_name,
+            "is_active": x.is_active,
+            "is_2faenabled": x.is_2faenabled,
+            "created_date": datetime_to_string_opt(x.created_date),
+            "updated_date": datetime_to_string_opt(x.updated_date),
+            "created_by": Null
+        })).collect::<Vec<Value>>()
+    }))
+    .await;
+    Ok(())
+}
 
 #[sqlx::test]
 async fn test_user_detail_api(pool: PgPool) -> anyhow::Result<()> {
@@ -33,10 +154,6 @@ async fn test_user_detail_api(pool: PgPool) -> anyhow::Result<()> {
     });
     let mut db = app_state.db.acquire().await?;
     let mut redis_conn = app_state.redis_conn.get()?;
-    // let mut role_factory = RoleFactory::new();
-    // let role = role_factory.generate_one(&app_state.db, ()).await?;
-    // let mut group_factory = GroupFactory::new();
-    // let group = group_factory.generate_one(&app_state.db, ()).await?;
     let test_user = generate_test_user(
         &mut db,
         &mut redis_conn,

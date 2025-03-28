@@ -119,7 +119,7 @@ impl UserDummy {
             updated_by: None,
             created_date: dummy.created_date,
             updated_date: dummy.updated_date,
-            deleted_date: dummy.deleted_date,
+            deleted_date: None,
         }
     }
 
@@ -137,7 +137,7 @@ impl UserDummy {
                 updated_by: None,
                 created_date: dummy.created_date,
                 updated_date: dummy.updated_date,
-                deleted_date: dummy.deleted_date,
+                deleted_date: None,
             });
         }
         result

@@ -16,10 +16,10 @@ pub struct DetailCreatedOrUpdatedUser {
 pub struct DetailUser {
     pub id: String,
     pub user_name: String,
-    pub is_active: bool,
-    pub is_2faenabled: bool,
-    pub created_date: String,
-    pub updated_date: String,
+    pub is_active: Option<bool>,
+    pub is_2faenabled: Option<bool>,
+    pub created_date: Option<String>,
+    pub updated_date: Option<String>,
     pub created_by: Option<DetailCreatedOrUpdatedUser>,
 }
 
