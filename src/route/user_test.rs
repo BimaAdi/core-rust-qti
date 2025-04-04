@@ -442,3 +442,105 @@ async fn test_user_delete_api(pool: PgPool) -> anyhow::Result<()> {
     assert_eq!(user.updated_by, Some(test_user.user.id));
     Ok(())
 }
+
+#[sqlx::test]
+async fn test_user_reset_password_api(pool: PgPool) -> anyhow::Result<()> {
+    // Given
+    let mut config = get_config();
+    config.prefix = Some("/api".to_string());
+    let client = redis::Client::open(config.redis_url.clone()).unwrap();
+    let redis_pool = r2d2::Pool::builder().build(client).unwrap();
+    let app_state = Arc::new(AppState {
+        db: pool,
+        redis_conn: redis_pool,
+    });
+    let mut db = app_state.db.acquire().await?;
+    let mut redis_conn = app_state.redis_conn.get()?;
+    let test_user = generate_test_user(
+        &mut db,
+        &mut redis_conn,
+        config.clone(),
+        "test_user",
+        "password",
+    )
+    .await?;
+    let user =
+        generate_test_user(&mut db, &mut redis_conn, config.clone(), "user", "password").await?;
+    let app = init_openapi_route(app_state.clone(), &config);
+    let cli = TestClient::new(app);
+
+    // When
+    let resp = cli
+        .post("/api/user/reset_passwd")
+        .header("authorization", format!("Bearer {}", test_user.token))
+        .query("user_id", &user.user.id.to_string())
+        .body_json(&json!({
+            "new_password": "secret",
+            "confirm_new_password": "secret"
+        }))
+        .send()
+        .await;
+
+    // Expect
+    resp.assert_status_is_ok();
+    let user: Option<User> =
+        sqlx::query_as(format!("SELECT * FROM {} WHERE id = $1", TABLE_NAME).as_str())
+            .bind(&user.user.id)
+            .fetch_optional(&mut *db)
+            .await?;
+    assert!(user.is_some());
+    let user = user.unwrap();
+    let res = verify_hash_password("secret", &user.password).unwrap();
+    assert!(res);
+    Ok(())
+}
+
+#[sqlx::test]
+async fn test_user_change_status_api(pool: PgPool) -> anyhow::Result<()> {
+    // Given
+    let mut config = get_config();
+    config.prefix = Some("/api".to_string());
+    let client = redis::Client::open(config.redis_url.clone()).unwrap();
+    let redis_pool = r2d2::Pool::builder().build(client).unwrap();
+    let app_state = Arc::new(AppState {
+        db: pool,
+        redis_conn: redis_pool,
+    });
+    let mut db = app_state.db.acquire().await?;
+    let mut redis_conn = app_state.redis_conn.get()?;
+    let test_user = generate_test_user(
+        &mut db,
+        &mut redis_conn,
+        config.clone(),
+        "test_user",
+        "password",
+    )
+    .await?;
+    let user =
+        generate_test_user(&mut db, &mut redis_conn, config.clone(), "user", "password").await?;
+    let app = init_openapi_route(app_state.clone(), &config);
+    let cli = TestClient::new(app);
+
+    // When
+    let resp = cli
+        .put("/api/user/change-status")
+        .header("authorization", format!("Bearer {}", test_user.token))
+        .query("id", &user.user.id.to_string())
+        .body_json(&json!({
+            "status": false
+        }))
+        .send()
+        .await;
+
+    // Expect
+    resp.assert_status(StatusCode::NO_CONTENT);
+    let user: Option<User> =
+        sqlx::query_as(format!("SELECT * FROM {} WHERE id = $1", TABLE_NAME).as_str())
+            .bind(&user.user.id)
+            .fetch_optional(&mut *db)
+            .await?;
+    assert!(user.is_some());
+    let user = user.unwrap();
+    assert_eq!(user.is_active, Some(false));
+    Ok(())
+}

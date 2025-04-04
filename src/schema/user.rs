@@ -222,7 +222,7 @@ pub struct ResetPasswordRequest {
 
 #[derive(Object, Deserialize)]
 pub struct ResetPasswordResponse {
-    message: String,
+    pub message: String,
 }
 
 #[derive(ApiResponse)]

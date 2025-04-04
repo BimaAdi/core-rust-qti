@@ -32,9 +32,9 @@ use crate::{
             ChangeStatusResponses, DeleteUserGroupRoleResponses, DetailCreatedOrUpdatedUser,
             DetailGroup, DetailGroupRole, DetailRole, DetailUser, DetailUserProfile,
             GetAllUserResponses, GetPaginateUserResponses, ResetPasswordRequest,
-            ResetPasswordResponses, UserCreateRequest, UserCreateResponse, UserCreateResponses,
-            UserDeleteResponses, UserDetailResponse, UserDetailResponses, UserUpdateRequest,
-            UserUpdateResponse, UserUpdateResponses,
+            ResetPasswordResponse, ResetPasswordResponses, UserCreateRequest, UserCreateResponse,
+            UserCreateResponses, UserDeleteResponses, UserDetailResponse, UserDetailResponses,
+            UserUpdateRequest, UserUpdateResponse, UserUpdateResponses,
         },
     },
     AppState,
@@ -1042,11 +1042,138 @@ impl ApiUser {
     )]
     async fn reset_password_api(
         &self,
-        Json(_json): Json<ResetPasswordRequest>,
-        _state: Data<&Arc<AppState>>,
-        _auth: BearerAuthorization,
+        Query(user_id): Query<String>,
+        Json(json): Json<ResetPasswordRequest>,
+        state: Data<&Arc<AppState>>,
+        auth: BearerAuthorization,
     ) -> ResetPasswordResponses {
-        todo!()
+        // Begin db transaction
+        let mut tx = match state.db.begin().await {
+            Ok(val) => val,
+            Err(err) => {
+                return ResetPasswordResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "reset_password_api",
+                        "begin transaction",
+                        &err.to_string(),
+                    ),
+                ));
+            }
+        };
+
+        // get redis conn from pool
+        let mut redis_conn = match state.redis_conn.get() {
+            Ok(val) => val,
+            Err(err) => {
+                return ResetPasswordResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "reset_password_api",
+                        "get redis pool connection",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+
+        // Validate user token
+        let jwt_token = auth.0.token;
+        let request_user =
+            match get_user_from_token(&mut tx, &mut redis_conn, jwt_token.clone()).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return ResetPasswordResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "reset_password_api",
+                            "get user from token",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            };
+        if request_user.is_none() {
+            return ResetPasswordResponses::Unauthorized(Json(UnauthorizedResponse::default()));
+        }
+        let request_user = request_user.unwrap();
+
+        // validate json request
+        if json.confirm_new_password != json.new_password {
+            return ResetPasswordResponses::BadRequest(Json(BadRequestResponse {
+                message: "new_password and confirm_new_password must be same".to_string(),
+            }));
+        }
+
+        // get user on db
+        let user_id = match Uuid::parse_str(&user_id) {
+            Ok(val) => val,
+            Err(_) => {
+                return ResetPasswordResponses::BadRequest(Json(BadRequestResponse {
+                    message: format!("user with user_id = {} not found", &user_id),
+                }))
+            }
+        };
+        let (user, user_profile) = match get_user_by_id(&mut tx, &user_id, None).await {
+            Ok(val) => val,
+            Err(err) => {
+                return ResetPasswordResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "reset_password_api",
+                        "get_user_by_id",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+        if user.is_none() || user_profile.is_none() {
+            return ResetPasswordResponses::BadRequest(Json(BadRequestResponse {
+                message: format!("user with user_id = {} not found", &user_id),
+            }));
+        }
+        let mut user = user.unwrap();
+        let user_profile = user_profile.unwrap();
+        user.password = match hash_password(&json.new_password) {
+            Ok(val) => val,
+            Err(err) => {
+                return ResetPasswordResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "reset_password_api",
+                        "hash_password",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+        // update user
+        let now = Local::now().fixed_offset();
+        if let Err(err) = update_user(&mut tx, &mut user, &user_profile, &request_user, &now).await
+        {
+            return ResetPasswordResponses::InternalServerError(Json(
+                InternalServerErrorResponse::new(
+                    "route.user",
+                    "reset_password_api",
+                    "update_user",
+                    &err.to_string(),
+                ),
+            ));
+        }
+        if let Err(err) = tx.commit().await {
+            return ResetPasswordResponses::InternalServerError(Json(
+                InternalServerErrorResponse::new(
+                    "route.user",
+                    "reset_password_api",
+                    "commit to database",
+                    &err.to_string(),
+                ),
+            ));
+        }
+
+        ResetPasswordResponses::Ok(Json(ResetPasswordResponse {
+            message: "user password updated successfully".to_string(),
+        }))
     }
 
     #[oai(
@@ -1056,12 +1183,115 @@ impl ApiUser {
     )]
     async fn change_status_api(
         &self,
-        Query(_id): Query<String>,
-        Json(_json): Json<ChangeStatusRequest>,
-        _state: Data<&Arc<AppState>>,
-        _auth: BearerAuthorization,
+        Query(id): Query<String>,
+        Json(json): Json<ChangeStatusRequest>,
+        state: Data<&Arc<AppState>>,
+        auth: BearerAuthorization,
     ) -> ChangeStatusResponses {
-        todo!()
+        // Begin db transaction
+        let mut tx = match state.db.begin().await {
+            Ok(val) => val,
+            Err(err) => {
+                return ChangeStatusResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "change_status_api",
+                        "begin transaction",
+                        &err.to_string(),
+                    ),
+                ));
+            }
+        };
+
+        // get redis conn from pool
+        let mut redis_conn = match state.redis_conn.get() {
+            Ok(val) => val,
+            Err(err) => {
+                return ChangeStatusResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "change_status_api",
+                        "get redis pool connection",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+
+        // Validate user token
+        let jwt_token = auth.0.token;
+        let request_user =
+            match get_user_from_token(&mut tx, &mut redis_conn, jwt_token.clone()).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return ChangeStatusResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "change_status_api",
+                            "get user from token",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            };
+        if request_user.is_none() {
+            return ChangeStatusResponses::Unauthorized(Json(UnauthorizedResponse::default()));
+        }
+        let request_user = request_user.unwrap();
+        // get user on db
+        let id = match Uuid::parse_str(&id) {
+            Ok(val) => val,
+            Err(_) => {
+                return ChangeStatusResponses::NotFound(Json(NotFoundResponse {
+                    message: format!("user with id = {} not found", &id),
+                }))
+            }
+        };
+        let (user, user_profile) = match get_user_by_id(&mut tx, &id, None).await {
+            Ok(val) => val,
+            Err(err) => {
+                return ChangeStatusResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "change_status_api",
+                        "get_user_by_id",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+        if user.is_none() || user_profile.is_none() {
+            return ChangeStatusResponses::NotFound(Json(NotFoundResponse {
+                message: format!("user with id = {} not found", &id),
+            }));
+        }
+        // Update status user
+        let now = Local::now().fixed_offset();
+        let mut user = user.unwrap();
+        user.is_active = Some(json.status);
+        let user_profile = user_profile.unwrap();
+        if let Err(err) = update_user(&mut tx, &mut user, &user_profile, &request_user, &now).await
+        {
+            return ChangeStatusResponses::InternalServerError(Json(
+                InternalServerErrorResponse::new(
+                    "route.user",
+                    "change_status_api",
+                    "update_user",
+                    &err.to_string(),
+                ),
+            ));
+        }
+        if let Err(err) = tx.commit().await {
+            return ChangeStatusResponses::InternalServerError(Json(
+                InternalServerErrorResponse::new(
+                    "route.user",
+                    "change_status_api",
+                    "commit to database",
+                    &err.to_string(),
+                ),
+            ));
+        }
+        ChangeStatusResponses::NoContent
     }
 
     #[oai(
