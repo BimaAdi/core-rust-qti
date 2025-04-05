@@ -21,6 +21,9 @@ use crate::{
             create_user, get_all_user, get_user_by_id, get_user_group_roles_by_user,
             soft_delete_user, update_user, upsert_user_group_roles,
         },
+        user_group_roles::{
+            add_user_group_roles, delete_user_group_roles, get_detail_user_group_roles,
+        },
     },
     schema::{
         common::{
@@ -28,10 +31,10 @@ use crate::{
             UnauthorizedResponse,
         },
         user::{
-            AddUserGroupRoleRequest, AddUserGroupRoleResponses, ChangeStatusRequest,
-            ChangeStatusResponses, DeleteUserGroupRoleResponses, DetailCreatedOrUpdatedUser,
-            DetailGroup, DetailGroupRole, DetailRole, DetailUser, DetailUserProfile,
-            GetAllUserResponses, GetPaginateUserResponses, ResetPasswordRequest,
+            AddUserGroupRoleRequest, AddUserGroupRoleResponse, AddUserGroupRoleResponses,
+            ChangeStatusRequest, ChangeStatusResponses, DeleteUserGroupRoleResponses,
+            DetailCreatedOrUpdatedUser, DetailGroup, DetailGroupRole, DetailRole, DetailUser,
+            DetailUserProfile, GetAllUserResponses, GetPaginateUserResponses, ResetPasswordRequest,
             ResetPasswordResponse, ResetPasswordResponses, UserCreateRequest, UserCreateResponse,
             UserCreateResponses, UserDeleteResponses, UserDetailResponse, UserDetailResponses,
             UserUpdateRequest, UserUpdateResponse, UserUpdateResponses,
@@ -1301,26 +1304,391 @@ impl ApiUser {
     )]
     async fn add_user_group_role_api(
         &self,
-        Json(_json): Json<AddUserGroupRoleRequest>,
-        _state: Data<&Arc<AppState>>,
-        _auth: BearerAuthorization,
+        Json(json): Json<AddUserGroupRoleRequest>,
+        state: Data<&Arc<AppState>>,
+        auth: BearerAuthorization,
     ) -> AddUserGroupRoleResponses {
-        todo!()
+        // Begin db transaction
+        let mut tx = match state.db.begin().await {
+            Ok(val) => val,
+            Err(err) => {
+                return AddUserGroupRoleResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "add_user_group_role_api",
+                        "begin transaction",
+                        &err.to_string(),
+                    ),
+                ));
+            }
+        };
+
+        // get redis conn from pool
+        let mut redis_conn = match state.redis_conn.get() {
+            Ok(val) => val,
+            Err(err) => {
+                return AddUserGroupRoleResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "add_user_group_role_api",
+                        "get redis pool connection",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+
+        // Validate user token
+        let jwt_token = auth.0.token;
+        let request_user =
+            match get_user_from_token(&mut tx, &mut redis_conn, jwt_token.clone()).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return AddUserGroupRoleResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "add_user_group_role_api",
+                            "get user from token",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            };
+        if request_user.is_none() {
+            return AddUserGroupRoleResponses::Unauthorized(Json(UnauthorizedResponse::default()));
+        }
+        // Validate json
+        let (user, _) = match Uuid::parse_str(&json.user_id) {
+            Ok(val) => match get_user_by_id(&mut tx, &val, None).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return AddUserGroupRoleResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "add_user_group_role_api",
+                            "get_user_by_id",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            },
+            Err(_) => {
+                return AddUserGroupRoleResponses::BadRequest(Json(BadRequestResponse {
+                    message: format!("user with id = {} not found", &json.user_id),
+                }))
+            }
+        };
+        if user.is_none() {
+            return AddUserGroupRoleResponses::BadRequest(Json(BadRequestResponse {
+                message: format!("user with id = {} not found", &json.user_id),
+            }));
+        }
+        let user = user.unwrap();
+
+        let role = match Uuid::parse_str(&json.role_id) {
+            Ok(val) => match get_role_by_id(&mut tx, &val).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return AddUserGroupRoleResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "add_user_group_role_api",
+                            "get_role_by_id",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            },
+            Err(_) => {
+                return AddUserGroupRoleResponses::BadRequest(Json(BadRequestResponse {
+                    message: format!("role with id = {} not found", &json.role_id),
+                }))
+            }
+        };
+        if role.is_none() {
+            return AddUserGroupRoleResponses::BadRequest(Json(BadRequestResponse {
+                message: format!("role with id = {} not found", &json.role_id),
+            }));
+        }
+        let role = role.unwrap();
+
+        let group = match Uuid::parse_str(&json.group_id) {
+            Ok(val) => match get_group_by_id(&mut tx, &val).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return AddUserGroupRoleResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "add_user_group_group_api",
+                            "get_group_by_id",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            },
+            Err(_) => {
+                return AddUserGroupRoleResponses::BadRequest(Json(BadRequestResponse {
+                    message: format!("group with id = {} not found", &json.group_id),
+                }))
+            }
+        };
+        if group.is_none() {
+            return AddUserGroupRoleResponses::BadRequest(Json(BadRequestResponse {
+                message: format!("group with id = {} not found", &json.group_id),
+            }));
+        }
+        let group = group.unwrap();
+
+        let user_group_roles =
+            match get_detail_user_group_roles(&mut tx, &user, &role, &group).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return AddUserGroupRoleResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "add_user_group_api",
+                            "get_detail_user_group_roles",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            };
+        if user_group_roles.is_some() {
+            return AddUserGroupRoleResponses::BadRequest(Json(BadRequestResponse {
+                message: format!(
+                    "user_group_roles with user_id = {}, role_id = {}, group id = {} already exist",
+                    &json.user_id, &json.role_id, &json.group_id
+                ),
+            }));
+        }
+
+        // add new user_group_roles
+        let new_user_group_roles = UserGroupRoles {
+            id: Uuid::now_v7(),
+            user_id: Some(user.id),
+            role_id: Some(role.id),
+            group_id: Some(group.id),
+        };
+        if let Err(err) = add_user_group_roles(&mut tx, &new_user_group_roles).await {
+            return AddUserGroupRoleResponses::InternalServerError(Json(
+                InternalServerErrorResponse::new(
+                    "route.user",
+                    "add_user_group_group_api",
+                    "add_user_group_roles",
+                    &err.to_string(),
+                ),
+            ));
+        }
+        if let Err(err) = tx.commit().await {
+            return AddUserGroupRoleResponses::InternalServerError(Json(
+                InternalServerErrorResponse::new(
+                    "route.user",
+                    "add_user_group_api",
+                    "commit to database",
+                    &err.to_string(),
+                ),
+            ));
+        }
+
+        AddUserGroupRoleResponses::Created(Json(AddUserGroupRoleResponse {
+            id: new_user_group_roles.id.to_string(),
+            user_id: new_user_group_roles.user_id.unwrap().to_string(),
+            role_id: new_user_group_roles.role_id.unwrap().to_string(),
+            group_id: new_user_group_roles.group_id.unwrap().to_string(),
+        }))
     }
 
     #[oai(
         path = "/user/delete-group-role/",
-        method = "post",
+        method = "delete",
         tag = "ApiUserTags::User"
     )]
     async fn delete_user_group_role_api(
         &self,
-        Query(_user_id): Query<String>,
-        Query(_role_id): Query<String>,
-        Query(_group_id): Query<String>,
-        _state: Data<&Arc<AppState>>,
-        _auth: BearerAuthorization,
+        Query(user_id): Query<String>,
+        Query(role_id): Query<String>,
+        Query(group_id): Query<String>,
+        state: Data<&Arc<AppState>>,
+        auth: BearerAuthorization,
     ) -> DeleteUserGroupRoleResponses {
-        todo!()
+        // Begin db transaction
+        let mut tx = match state.db.begin().await {
+            Ok(val) => val,
+            Err(err) => {
+                return DeleteUserGroupRoleResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "delete_user_group_role_api",
+                        "begin transaction",
+                        &err.to_string(),
+                    ),
+                ));
+            }
+        };
+
+        // get redis conn from pool
+        let mut redis_conn = match state.redis_conn.get() {
+            Ok(val) => val,
+            Err(err) => {
+                return DeleteUserGroupRoleResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.user",
+                        "delete_user_group_role_api",
+                        "get redis pool connection",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+
+        // Validate user token
+        let jwt_token = auth.0.token;
+        let request_user =
+            match get_user_from_token(&mut tx, &mut redis_conn, jwt_token.clone()).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return DeleteUserGroupRoleResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "delete_user_group_role_api",
+                            "get user from token",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            };
+        if request_user.is_none() {
+            return DeleteUserGroupRoleResponses::Unauthorized(Json(
+                UnauthorizedResponse::default(),
+            ));
+        }
+        // Validate json
+        let (user, _) = match Uuid::parse_str(&user_id) {
+            Ok(val) => match get_user_by_id(&mut tx, &val, None).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return DeleteUserGroupRoleResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "delete_user_group_role_api",
+                            "get_user_by_id",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            },
+            Err(_) => {
+                return DeleteUserGroupRoleResponses::BadRequest(Json(BadRequestResponse {
+                    message: format!("user with id = {} not found", &user_id),
+                }))
+            }
+        };
+        if user.is_none() {
+            return DeleteUserGroupRoleResponses::BadRequest(Json(BadRequestResponse {
+                message: format!("user with id = {} not found", &user_id),
+            }));
+        }
+        let user = user.unwrap();
+
+        let role = match Uuid::parse_str(&role_id) {
+            Ok(val) => match get_role_by_id(&mut tx, &val).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return DeleteUserGroupRoleResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "delete_user_group_role_api",
+                            "get_role_by_id",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            },
+            Err(_) => {
+                return DeleteUserGroupRoleResponses::BadRequest(Json(BadRequestResponse {
+                    message: format!("role with id = {} not found", &role_id),
+                }))
+            }
+        };
+        if role.is_none() {
+            return DeleteUserGroupRoleResponses::BadRequest(Json(BadRequestResponse {
+                message: format!("role with id = {} not found", &role_id),
+            }));
+        }
+        let role = role.unwrap();
+
+        let group = match Uuid::parse_str(&group_id) {
+            Ok(val) => match get_group_by_id(&mut tx, &val).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return DeleteUserGroupRoleResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "delete_user_group_role_api",
+                            "get_group_by_id",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            },
+            Err(_) => {
+                return DeleteUserGroupRoleResponses::BadRequest(Json(BadRequestResponse {
+                    message: format!("group with id = {} not found", &group_id),
+                }))
+            }
+        };
+        if group.is_none() {
+            return DeleteUserGroupRoleResponses::BadRequest(Json(BadRequestResponse {
+                message: format!("group with id = {} not found", &group_id),
+            }));
+        }
+        let group = group.unwrap();
+
+        let user_group_roles =
+            match get_detail_user_group_roles(&mut tx, &user, &role, &group).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return DeleteUserGroupRoleResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.user",
+                            "delete_user_group_role_api",
+                            "get_detail_user_group_roles",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            };
+        if user_group_roles.is_none() {
+            return DeleteUserGroupRoleResponses::BadRequest(Json(BadRequestResponse {
+                message: format!(
+                    "user_group_roles with user_id = {}, role_id = {}, group id = {} not found",
+                    &user_id, &role_id, &group_id
+                ),
+            }));
+        }
+
+        // Delete user group roles
+        if let Err(err) = delete_user_group_roles(&mut tx, &user, &role, &group).await {
+            return DeleteUserGroupRoleResponses::InternalServerError(Json(
+                InternalServerErrorResponse::new(
+                    "route.user",
+                    "delete_user_group_role_api",
+                    "delete_user_group_roles",
+                    &err.to_string(),
+                ),
+            ));
+        }
+        if let Err(err) = tx.commit().await {
+            return DeleteUserGroupRoleResponses::InternalServerError(Json(
+                InternalServerErrorResponse::new(
+                    "route.user",
+                    "delete_user_group_role_api",
+                    "commit to database",
+                    &err.to_string(),
+                ),
+            ));
+        }
+
+        DeleteUserGroupRoleResponses::NoContent
     }
 }

@@ -286,14 +286,14 @@ pub enum AddUserGroupRoleResponses {
     #[oai(status = 201)]
     Created(Json<AddUserGroupRoleResponse>),
 
+    #[oai(status = 400)]
+    BadRequest(Json<BadRequestResponse>),
+
     #[oai(status = 401)]
     Unauthorized(Json<UnauthorizedResponse>),
 
     #[oai(status = 403)]
     Forbidden(Json<ForbiddenResponse>),
-
-    #[oai(status = 404)]
-    NotFound(Json<NotFoundResponse>),
 
     #[oai(status = 500)]
     InternalServerError(Json<InternalServerErrorResponse>),
@@ -304,14 +304,14 @@ pub enum DeleteUserGroupRoleResponses {
     #[oai(status = 204)]
     NoContent,
 
+    #[oai(status = 400)]
+    BadRequest(Json<BadRequestResponse>),
+
     #[oai(status = 401)]
     Unauthorized(Json<UnauthorizedResponse>),
 
     #[oai(status = 403)]
     Forbidden(Json<ForbiddenResponse>),
-
-    #[oai(status = 404)]
-    NotFound(Json<NotFoundResponse>),
 
     #[oai(status = 500)]
     InternalServerError(Json<InternalServerErrorResponse>),

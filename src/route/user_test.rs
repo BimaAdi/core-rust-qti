@@ -544,3 +544,91 @@ async fn test_user_change_status_api(pool: PgPool) -> anyhow::Result<()> {
     assert_eq!(user.is_active, Some(false));
     Ok(())
 }
+
+#[sqlx::test]
+async fn test_add_user_group_role_api_and_delete_user_group_role_api(
+    pool: PgPool,
+) -> anyhow::Result<()> {
+    // Given
+    let mut config = get_config();
+    config.prefix = Some("/api".to_string());
+    let client = redis::Client::open(config.redis_url.clone()).unwrap();
+    let redis_pool = r2d2::Pool::builder().build(client).unwrap();
+    let app_state = Arc::new(AppState {
+        db: pool,
+        redis_conn: redis_pool,
+    });
+    let mut db = app_state.db.acquire().await?;
+    let mut redis_conn = app_state.redis_conn.get()?;
+    let test_user = generate_test_user(
+        &mut db,
+        &mut redis_conn,
+        config.clone(),
+        "test_user",
+        "password",
+    )
+    .await?;
+    let user =
+        generate_test_user(&mut db, &mut redis_conn, config.clone(), "user", "password").await?;
+    let mut role_factory = RoleFactory::new();
+    let role = role_factory.generate_one(&app_state.db, ()).await?;
+    let mut group_factory = GroupFactory::new();
+    let group = group_factory.generate_one(&app_state.db, ()).await?;
+    let app = init_openapi_route(app_state.clone(), &config);
+    let cli = TestClient::new(app);
+
+    // When create
+    let resp = cli
+        .post("/api/user/add-group-role")
+        .header("authorization", format!("Bearer {}", test_user.token))
+        .body_json(&json!({
+            "user_id": user.user.id.to_string(),
+            "role_id": role.id.to_string(),
+            "group_id": group.id.to_string(),
+        }))
+        .send()
+        .await;
+
+    // Expect create
+    resp.assert_status(StatusCode::CREATED);
+    let user_group_roles: Option<UserGroupRoles> = sqlx::query_as(
+        format!(
+            "SELECT * FROM {} WHERE user_id = $1 AND role_id = $2 AND group_id = $3",
+            USER_GROUP_ROLES_TABLE_NAME
+        )
+        .as_str(),
+    )
+    .bind(&user.user.id)
+    .bind(&role.id)
+    .bind(&group.id)
+    .fetch_optional(&mut *db)
+    .await?;
+    assert!(user_group_roles.is_some());
+
+    // When delete
+    let resp = cli
+        .delete("/api/user/delete-group-role")
+        .header("authorization", format!("Bearer {}", test_user.token))
+        .query("user_id", &user.user.id.to_string())
+        .query("role_id", &role.id.to_string())
+        .query("group_id", &group.id.to_string())
+        .send()
+        .await;
+
+    // Expect delete
+    resp.assert_status(StatusCode::NO_CONTENT);
+    let user_group_roles: Option<UserGroupRoles> = sqlx::query_as(
+        format!(
+            "SELECT * FROM {} WHERE user_id = $1 AND role_id = $2 AND group_id = $3",
+            USER_GROUP_ROLES_TABLE_NAME
+        )
+        .as_str(),
+    )
+    .bind(&user.user.id)
+    .bind(&role.id)
+    .bind(&group.id)
+    .fetch_optional(&mut *db)
+    .await?;
+    assert!(user_group_roles.is_none());
+    Ok(())
+}
