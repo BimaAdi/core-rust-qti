@@ -7,8 +7,8 @@ use poem::{
 use poem_openapi::OpenApiService;
 use r2d2::Pool as r2d2Pool;
 use redis::Client;
-use route::role::ApiRole;
 use route::{auth::ApiAuth, group::ApiGroup, user::ApiUser};
+use route::{permission::ApiPermission, role::ApiRole};
 use settings::Config;
 use sqlx::{Pool, Postgres};
 
@@ -31,8 +31,12 @@ pub fn init_openapi_route(
     config: &Config,
 ) -> CorsEndpoint<AddDataEndpoint<Route, Arc<AppState>>> {
     let prefix = config.prefix.clone().unwrap_or("/".to_string());
-    let openapi_route = OpenApiService::new((ApiAuth, ApiUser, ApiRole, ApiGroup), "Core", "1.0")
-        .server(prefix.clone());
+    let openapi_route = OpenApiService::new(
+        (ApiAuth, ApiUser, ApiRole, ApiGroup, ApiPermission),
+        "Core",
+        "1.0",
+    )
+    .server(prefix.clone());
     let openapi_json_endpoint = openapi_route.spec_endpoint();
     let ui = openapi_route.swagger_ui();
     Route::new()
