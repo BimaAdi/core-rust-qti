@@ -101,3 +101,23 @@ pub fn query_builder(
     }
     stmt
 }
+
+pub fn in_helper(
+    binds: &mut Vec<SqlxBinds>,
+    filters: &mut Vec<String>,
+    ins: Vec<SqlxBinds>,
+    column: &str,
+) {
+    let mut query = format!("{} IN (", column);
+    for (idx, item) in ins.iter().enumerate() {
+        binds.push(item.clone());
+        query.push_str(format!("${}", binds.len()).as_str());
+        if idx != ins.len() - 1 {
+            query.push_str(", ");
+        }
+    }
+    query.push(')');
+    if !ins.is_empty() {
+        filters.push(query);
+    }
+}

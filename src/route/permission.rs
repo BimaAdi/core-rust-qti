@@ -6,22 +6,32 @@ use poem_openapi::{param::Query, payload::Json, OpenApi, Tags};
 use uuid::Uuid;
 
 use crate::{
-    core::security::{get_user_from_token, BearerAuthorization},
+    core::{
+        security::{get_user_from_token, BearerAuthorization},
+        utils::datetime_to_string_opt,
+    },
     model::{
         permission::Permission, permission_attribute::PermissionAttribute,
-        permission_attribute_list::PermissionAttributeList,
+        permission_attribute_list::PermissionAttributeList, user::User,
     },
     repository::{
-        permission::create_permission, permission_attribute::get_permission_attribute_by_id,
-        permission_attribute_list::create_permission_attribute_list,
+        permission::{create_permission, get_permission_by_id},
+        permission_attribute::{get_permission_attribute_by_id, get_permission_attribute_by_ids},
+        permission_attribute_list::{
+            create_permission_attribute_list, get_all_permission_attribute_list,
+        },
+        user::get_user_by_id,
     },
     schema::{
-        common::{BadRequestResponse, InternalServerErrorResponse, UnauthorizedResponse},
+        common::{
+            BadRequestResponse, InternalServerErrorResponse, NotFoundResponse, UnauthorizedResponse,
+        },
         permission::{
-            AllPermissionResponses, DropdownPermissionResponses, PaginatePermissionResponses,
+            AllPermissionResponses, DetailUserPermission, DropdownPermissionResponses,
+            PaginatePermissionResponses, PermissionAttributeListPermissionDetail,
             PermissionCreateRequest, PermissionCreateResponse, PermissionCreateResponses,
-            PermissionDeleteResponses, PermissionDetailResponses, PermissionUpdateRequest,
-            PermissionUpdateResponses,
+            PermissionDeleteResponses, PermissionDetailResponse, PermissionDetailResponses,
+            PermissionUpdateRequest, PermissionUpdateResponses,
         },
     },
     AppState,
@@ -95,11 +105,181 @@ impl ApiPermission {
     )]
     async fn get_detail_permission_api(
         &self,
-        Query(_id): Query<String>,
-        _state: Data<&Arc<AppState>>,
-        _auth: BearerAuthorization,
+        Query(id): Query<String>,
+        state: Data<&Arc<AppState>>,
+        auth: BearerAuthorization,
     ) -> PermissionDetailResponses {
-        todo!()
+        // Begin db transaction
+        let mut tx = match state.db.begin().await {
+            Ok(val) => val,
+            Err(err) => {
+                return PermissionDetailResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "get_detail_permission_api",
+                        "begin transaction",
+                        &err.to_string(),
+                    ),
+                ));
+            }
+        };
+
+        // get redis conn from pool
+        let mut redis_conn = match state.redis_conn.get() {
+            Ok(val) => val,
+            Err(err) => {
+                return PermissionDetailResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "get_detail_permission_api",
+                        "get redis pool connection",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+
+        // Validate user token
+        let jwt_token = auth.0.token;
+        let user = match get_user_from_token(&mut tx, &mut redis_conn, jwt_token.clone()).await {
+            Ok(val) => val,
+            Err(err) => {
+                return PermissionDetailResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "get_detail_permission_api",
+                        "get user from token",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+        if user.is_none() {
+            return PermissionDetailResponses::Unauthorized(Json(UnauthorizedResponse::default()));
+        }
+
+        // get detail permission
+        let id = match Uuid::parse_str(&id) {
+            Ok(val) => val,
+            Err(_) => {
+                return PermissionDetailResponses::NotFound(Json(NotFoundResponse {
+                    message: format!("permission with id = {} not found", id),
+                }))
+            }
+        };
+
+        let data = match get_permission_by_id(&mut tx, &id).await {
+            Ok(val) => val,
+            Err(err) => {
+                return PermissionDetailResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "get_detail_permission_api",
+                        "get_permission_by_id",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+        if data.is_none() {
+            return PermissionDetailResponses::NotFound(Json(NotFoundResponse {
+                message: format!("permission with id = {} not found", id),
+            }));
+        }
+        let data = data.unwrap();
+        let mut created_by: Option<User> = None;
+        if data.created_by.is_some() {
+            (created_by, _) = match get_user_by_id(&mut tx, &data.id, Some(true)).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return PermissionDetailResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.permission",
+                            "get_detail_permission_api",
+                            "get user created_by",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            };
+        }
+        let mut updated_by: Option<User> = None;
+        if data.updated_by.is_some() {
+            (updated_by, _) = match get_user_by_id(&mut tx, &data.id, Some(true)).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return PermissionDetailResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.permission",
+                            "get_detail_permission_api",
+                            "get user updated_by",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            };
+        }
+        let permission_attribute_lists =
+            match get_all_permission_attribute_list(&mut tx, Some(&data.id), None).await {
+                Ok(val) => val,
+                Err(err) => {
+                    return PermissionDetailResponses::InternalServerError(Json(
+                        InternalServerErrorResponse::new(
+                            "route.permission",
+                            "get_detail_permission_api",
+                            "get_all_permission_attribute_list",
+                            &err.to_string(),
+                        ),
+                    ))
+                }
+            };
+        let attribute_ids: Vec<Uuid> = permission_attribute_lists
+            .iter()
+            .map(|x| x.attribute_id)
+            .collect();
+        let mut permission_attributes: Vec<PermissionAttribute> = vec![];
+        if !attribute_ids.is_empty() {
+            permission_attributes =
+                match get_permission_attribute_by_ids(&mut tx, attribute_ids).await {
+                    Ok(val) => val,
+                    Err(err) => {
+                        return PermissionDetailResponses::InternalServerError(Json(
+                            InternalServerErrorResponse::new(
+                                "route.permission",
+                                "get_detail_permission_api",
+                                "get_permission_attribute_by_ids",
+                                &err.to_string(),
+                            ),
+                        ))
+                    }
+                };
+        }
+        PermissionDetailResponses::Ok(Json(PermissionDetailResponse {
+            id: data.id.to_string(),
+            permission_name: data.permission_name,
+            description: data.description,
+            is_user: data.is_user.unwrap_or(false),
+            is_role: data.is_role.unwrap_or(false),
+            is_group: data.is_group.unwrap_or(false),
+            created_date: datetime_to_string_opt(data.created_date),
+            updated_date: datetime_to_string_opt(data.updated_date),
+            created_by: created_by.map(|x| DetailUserPermission {
+                id: x.id.to_string(),
+                user_name: x.user_name,
+            }),
+            updated_by: updated_by.map(|x| DetailUserPermission {
+                id: x.id.to_string(),
+                user_name: x.user_name,
+            }),
+            permission_attribute_ids: permission_attributes
+                .iter()
+                .map(|x| PermissionAttributeListPermissionDetail {
+                    id: x.id.to_string(),
+                    name: x.name.clone(),
+                    description: x.description.clone(),
+                })
+                .collect(),
+        }))
     }
 
     #[oai(

@@ -74,7 +74,10 @@ pub async fn get_all_permission(
     let q_count = binds_query_as::<(i64,)>(&stmt_count, binds);
     let data = q.fetch_all(&mut **tx).await?;
     let count = q_count.fetch_one(&mut **tx).await?;
-    let num_page = (count.0 as u32).div_ceil(page_size);
+    let num_page = match all {
+        true => 0,
+        false => (count.0 as u32).div_ceil(page_size),
+    };
     Ok((data, count.0 as u32, num_page as u32))
 }
 

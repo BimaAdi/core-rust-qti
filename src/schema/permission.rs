@@ -81,25 +81,25 @@ pub enum DropdownPermissionResponses {
 }
 
 #[derive(Object, Deserialize, Serialize)]
-pub struct PermissionAttributeList {
+pub struct PermissionAttributeListPermissionDetail {
     pub id: String,
     pub name: String,
-    pub description: String,
+    pub description: Option<String>,
 }
 
 #[derive(Object, Deserialize, Serialize)]
 pub struct PermissionDetailResponse {
     pub id: String,
     pub permission_name: String,
-    pub description: String,
+    pub description: Option<String>,
     pub is_user: bool,
     pub is_role: bool,
     pub is_group: bool,
-    pub created_date: String,
-    pub updated_date: String,
+    pub created_date: Option<String>,
+    pub updated_date: Option<String>,
     pub created_by: Option<DetailUserPermission>,
     pub updated_by: Option<DetailUserPermission>,
-    pub permission_attribute_ids: Vec<PermissionAttributeList>,
+    pub permission_attribute_ids: Vec<PermissionAttributeListPermissionDetail>,
 }
 
 #[allow(clippy::large_enum_variant)]
