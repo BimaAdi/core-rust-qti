@@ -123,8 +123,8 @@ impl PermissionAttributeDummy {
             id: dummy.id,
             name: dummy.name,
             description: dummy.description,
-            created_date: dummy.created_date,
-            updated_date: dummy.updated_date,
+            created_date: Some(Faker.fake::<DateTime<FixedOffset>>()),
+            updated_date: Some(Faker.fake::<DateTime<FixedOffset>>()),
         }
     }
 
@@ -136,8 +136,8 @@ impl PermissionAttributeDummy {
                 id: dummy.id,
                 name: dummy.name,
                 description: dummy.description,
-                created_date: dummy.created_date,
-                updated_date: dummy.updated_date,
+                created_date: Some(Faker.fake::<DateTime<FixedOffset>>()),
+                updated_date: Some(Faker.fake::<DateTime<FixedOffset>>()),
             });
         }
         result

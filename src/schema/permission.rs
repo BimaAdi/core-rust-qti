@@ -156,7 +156,7 @@ pub enum PermissionCreateResponses {
 #[derive(Object, Deserialize)]
 pub struct PermissionUpdateRequest {
     pub permission_name: String,
-    pub description: String,
+    pub description: Option<String>,
     pub is_user: bool,
     pub is_role: bool,
     pub is_group: bool,
@@ -167,7 +167,7 @@ pub struct PermissionUpdateRequest {
 pub struct PermissionUpdateResponse {
     pub id: String,
     pub permission_name: String,
-    pub description: String,
+    pub description: Option<String>,
     pub is_user: bool,
     pub is_role: bool,
     pub is_group: bool,
@@ -175,7 +175,7 @@ pub struct PermissionUpdateResponse {
 
 #[derive(ApiResponse)]
 pub enum PermissionUpdateResponses {
-    #[oai(status = 201)]
+    #[oai(status = 200)]
     Ok(Json<PermissionUpdateResponse>),
 
     #[oai(status = 400)]

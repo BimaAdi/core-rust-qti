@@ -3,7 +3,11 @@ use uuid::Uuid;
 
 use crate::{
     core::sqlx_utils::{binds_query_as, query_builder, SqlxBinds},
-    model::permission_attribute_list::{PermissionAttributeList, TABLE_NAME},
+    model::{
+        permission::Permission,
+        permission_attribute::PermissionAttribute,
+        permission_attribute_list::{PermissionAttributeList, TABLE_NAME},
+    },
 };
 
 pub async fn get_all_permission_attribute_list(
@@ -43,5 +47,30 @@ pub async fn create_permission_attribute_list(
     .bind(permission_attribute_list.attribute_id)
     .execute(&mut **tx)
     .await?;
+    Ok(())
+}
+
+pub async fn update_permssion_attribute_list_by_permission(
+    tx: &mut Transaction<'_, Postgres>,
+    permission: &Permission,
+    permission_attribute: Vec<PermissionAttribute>,
+) -> anyhow::Result<()> {
+    sqlx::query(format!("DELETE FROM {} WHERE permission_id = $1", TABLE_NAME).as_str())
+        .bind(permission.id)
+        .execute(&mut **tx)
+        .await?;
+    for item in permission_attribute {
+        sqlx::query(
+            format!(
+                "INSERT INTO {} (permission_id, attribute_id) VALUES ($1, $2)",
+                TABLE_NAME
+            )
+            .as_str(),
+        )
+        .bind(permission.id)
+        .bind(item.id)
+        .execute(&mut **tx)
+        .await?;
+    }
     Ok(())
 }

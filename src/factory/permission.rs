@@ -122,8 +122,8 @@ impl PermissionDummy {
             description: dummy.description,
             created_by: None,
             updated_by: None,
-            created_date: dummy.created_date,
-            updated_date: dummy.updated_date,
+            created_date: Some(Faker.fake::<DateTime<FixedOffset>>()),
+            updated_date: Some(Faker.fake::<DateTime<FixedOffset>>()),
         }
     }
 
@@ -140,8 +140,8 @@ impl PermissionDummy {
                 description: dummy.description,
                 created_by: None,
                 updated_by: None,
-                created_date: dummy.created_date,
-                updated_date: dummy.updated_date,
+                created_date: Some(Faker.fake::<DateTime<FixedOffset>>()),
+                updated_date: Some(Faker.fake::<DateTime<FixedOffset>>()),
             });
         }
         result

@@ -15,10 +15,13 @@ use crate::{
         permission_attribute_list::PermissionAttributeList, user::User,
     },
     repository::{
-        permission::{create_permission, get_permission_by_id},
+        permission::{
+            create_permission, delete_permission, get_permission_by_id, update_permission,
+        },
         permission_attribute::{get_permission_attribute_by_id, get_permission_attribute_by_ids},
         permission_attribute_list::{
             create_permission_attribute_list, get_all_permission_attribute_list,
+            update_permssion_attribute_list_by_permission,
         },
         user::get_user_by_id,
     },
@@ -31,7 +34,7 @@ use crate::{
             PaginatePermissionResponses, PermissionAttributeListPermissionDetail,
             PermissionCreateRequest, PermissionCreateResponse, PermissionCreateResponses,
             PermissionDeleteResponses, PermissionDetailResponse, PermissionDetailResponses,
-            PermissionUpdateRequest, PermissionUpdateResponses,
+            PermissionUpdateRequest, PermissionUpdateResponse, PermissionUpdateResponses,
         },
     },
     AppState,
@@ -443,12 +446,173 @@ impl ApiPermission {
     )]
     async fn update_permission_api(
         &self,
-        Query(_id): Query<String>,
-        Json(_json): Json<PermissionUpdateRequest>,
-        _state: Data<&Arc<AppState>>,
-        _auth: BearerAuthorization,
+        Query(id): Query<String>,
+        Json(json): Json<PermissionUpdateRequest>,
+        state: Data<&Arc<AppState>>,
+        auth: BearerAuthorization,
     ) -> PermissionUpdateResponses {
-        todo!()
+        // Begin db transaction
+        let mut tx = match state.db.begin().await {
+            Ok(val) => val,
+            Err(err) => {
+                return PermissionUpdateResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "update_permission_api",
+                        "begin transaction",
+                        &err.to_string(),
+                    ),
+                ));
+            }
+        };
+
+        // get redis conn from pool
+        let mut redis_conn = match state.redis_conn.get() {
+            Ok(val) => val,
+            Err(err) => {
+                return PermissionUpdateResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "update_permission_api",
+                        "get redis pool connection",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+
+        // Validate user token
+        let jwt_token = auth.0.token;
+        let user = match get_user_from_token(&mut tx, &mut redis_conn, jwt_token.clone()).await {
+            Ok(val) => val,
+            Err(err) => {
+                return PermissionUpdateResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "update_permission_api",
+                        "get user from token",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+        if user.is_none() {
+            return PermissionUpdateResponses::Unauthorized(Json(UnauthorizedResponse::default()));
+        }
+        let request_user = user.unwrap();
+
+        // get detail permission
+        let id = match Uuid::parse_str(&id) {
+            Ok(val) => val,
+            Err(_) => {
+                return PermissionUpdateResponses::NotFound(Json(NotFoundResponse {
+                    message: format!("permission with id = {} not found", id),
+                }))
+            }
+        };
+
+        let data = match get_permission_by_id(&mut tx, &id).await {
+            Ok(val) => val,
+            Err(err) => {
+                return PermissionUpdateResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "update_permission_api",
+                        "get_permission_by_id",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+        if data.is_none() {
+            return PermissionUpdateResponses::NotFound(Json(NotFoundResponse {
+                message: format!("permission with id = {} not found", id),
+            }));
+        }
+        // Validate json request
+        let mut permission_attributes: Vec<PermissionAttribute> = vec![];
+        for item in json.permission_attribute_ids {
+            let permission_attribute_id = match Uuid::parse_str(&item) {
+                Ok(val) => val,
+                Err(_) => {
+                    return PermissionUpdateResponses::BadRequest(Json(BadRequestResponse {
+                        message: format!("permission attribute id = {} not found", item),
+                    }));
+                }
+            };
+            let permission_attribute =
+                match get_permission_attribute_by_id(&mut tx, &permission_attribute_id).await {
+                    Ok(val) => val,
+                    Err(err) => {
+                        return PermissionUpdateResponses::InternalServerError(Json(
+                            InternalServerErrorResponse::new(
+                                "route.permission",
+                                "create_permission_api",
+                                "get_permission_attribute_by_id",
+                                &err.to_string(),
+                            ),
+                        ))
+                    }
+                };
+            if permission_attribute.is_none() {
+                return PermissionUpdateResponses::BadRequest(Json(BadRequestResponse {
+                    message: format!("permission attribute id = {} not found", item),
+                }));
+            }
+            permission_attributes.push(permission_attribute.unwrap());
+        }
+        // Update permission
+        let mut data = data.unwrap();
+        let now = Local::now().fixed_offset();
+        data.permission_name = json.permission_name;
+        data.description = json.description;
+        data.is_user = Some(json.is_user);
+        data.is_role = Some(json.is_role);
+        data.is_group = Some(json.is_group);
+        data.updated_by = Some(request_user.id);
+        data.updated_date = Some(now);
+        if let Err(err) = update_permission(&mut tx, &data).await {
+            return PermissionUpdateResponses::InternalServerError(Json(
+                InternalServerErrorResponse::new(
+                    "route.permission",
+                    "update_permission_api",
+                    "update_permission",
+                    &err.to_string(),
+                ),
+            ));
+        }
+        if let Err(err) =
+            update_permssion_attribute_list_by_permission(&mut tx, &data, permission_attributes)
+                .await
+        {
+            return PermissionUpdateResponses::InternalServerError(Json(
+                InternalServerErrorResponse::new(
+                    "route.permission",
+                    "update_permission_api",
+                    "update_permssion_attribute_list_by_permission",
+                    &err.to_string(),
+                ),
+            ));
+        }
+        if let Err(err) = tx.commit().await {
+            return PermissionUpdateResponses::InternalServerError(Json(
+                InternalServerErrorResponse::new(
+                    "route.permission",
+                    "update_permission_api",
+                    "commit transaction",
+                    &err.to_string(),
+                ),
+            ));
+        }
+
+        PermissionUpdateResponses::Ok(Json(PermissionUpdateResponse {
+            id: data.id.to_string(),
+            permission_name: data.permission_name,
+            description: data.description,
+            is_user: data.is_user.unwrap_or(false),
+            is_role: data.is_role.unwrap_or(false),
+            is_group: data.is_group.unwrap_or(false),
+        }))
     }
 
     #[oai(
@@ -458,10 +622,108 @@ impl ApiPermission {
     )]
     async fn delete_permission_api(
         &self,
-        Query(_id): Query<String>,
-        _state: Data<&Arc<AppState>>,
-        _auth: BearerAuthorization,
+        Query(id): Query<String>,
+        state: Data<&Arc<AppState>>,
+        auth: BearerAuthorization,
     ) -> PermissionDeleteResponses {
-        todo!()
+        // Begin db transaction
+        let mut tx = match state.db.begin().await {
+            Ok(val) => val,
+            Err(err) => {
+                return PermissionDeleteResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "delete_permission_api",
+                        "begin transaction",
+                        &err.to_string(),
+                    ),
+                ));
+            }
+        };
+
+        // get redis conn from pool
+        let mut redis_conn = match state.redis_conn.get() {
+            Ok(val) => val,
+            Err(err) => {
+                return PermissionDeleteResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "delete_permission_api",
+                        "get redis pool connection",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+
+        // Validate user token
+        let jwt_token = auth.0.token;
+        let user = match get_user_from_token(&mut tx, &mut redis_conn, jwt_token.clone()).await {
+            Ok(val) => val,
+            Err(err) => {
+                return PermissionDeleteResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "delete_permission_api",
+                        "get user from token",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+        if user.is_none() {
+            return PermissionDeleteResponses::Unauthorized(Json(UnauthorizedResponse::default()));
+        }
+
+        // get detail permission
+        let id = match Uuid::parse_str(&id) {
+            Ok(val) => val,
+            Err(_) => {
+                return PermissionDeleteResponses::NotFound(Json(NotFoundResponse {
+                    message: format!("permission with id = {} not found", id),
+                }))
+            }
+        };
+
+        let data = match get_permission_by_id(&mut tx, &id).await {
+            Ok(val) => val,
+            Err(err) => {
+                return PermissionDeleteResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "delete_permission_api",
+                        "get_permission_by_id",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+        if data.is_none() {
+            return PermissionDeleteResponses::NotFound(Json(NotFoundResponse {
+                message: format!("permission with id = {} not found", id),
+            }));
+        }
+        let data = data.unwrap();
+        if let Err(err) = delete_permission(&mut tx, &data).await {
+            return PermissionDeleteResponses::InternalServerError(Json(
+                InternalServerErrorResponse::new(
+                    "route.permission",
+                    "delete_permission_api",
+                    "delete_permission",
+                    &err.to_string(),
+                ),
+            ));
+        }
+        if let Err(err) = tx.commit().await {
+            return PermissionDeleteResponses::InternalServerError(Json(
+                InternalServerErrorResponse::new(
+                    "route.permission",
+                    "delete_permission_api",
+                    "commit transaction",
+                    &err.to_string(),
+                ),
+            ));
+        }
+        PermissionDeleteResponses::NoContent
     }
 }
