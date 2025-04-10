@@ -16,7 +16,8 @@ use crate::{
     },
     repository::{
         permission::{
-            create_permission, delete_permission, get_permission_by_id, update_permission,
+            create_permission, delete_permission, get_all_permission, get_permission_by_id,
+            update_permission,
         },
         permission_attribute::{get_permission_attribute_by_id, get_permission_attribute_by_ids},
         permission_attribute_list::{
@@ -27,13 +28,15 @@ use crate::{
     },
     schema::{
         common::{
-            BadRequestResponse, InternalServerErrorResponse, NotFoundResponse, UnauthorizedResponse,
+            BadRequestResponse, InternalServerErrorResponse, NotFoundResponse, PaginateResponse,
+            UnauthorizedResponse,
         },
         permission::{
-            AllPermissionResponses, DetailUserPermission, DropdownPermissionResponses,
-            PaginatePermissionResponses, PermissionAttributeListPermissionDetail,
-            PermissionCreateRequest, PermissionCreateResponse, PermissionCreateResponses,
-            PermissionDeleteResponses, PermissionDetailResponse, PermissionDetailResponses,
+            AllPermissionResponses, DetailPermission, DetailUserPermission,
+            DropdownPermissionResponses, PaginatePermissionResponses, PermissionAllResponse,
+            PermissionAttributeListPermissionDetail, PermissionCreateRequest,
+            PermissionCreateResponse, PermissionCreateResponses, PermissionDeleteResponses,
+            PermissionDetailResponse, PermissionDetailResponses, PermissionDropdownResponse,
             PermissionUpdateRequest, PermissionUpdateResponse, PermissionUpdateResponses,
         },
     },
@@ -57,16 +60,144 @@ impl ApiPermission {
     )]
     async fn paginate_permission_api(
         &self,
-        Query(_page): Query<Option<u32>>,
-        Query(_page_size): Query<Option<u32>>,
-        Query(_search): Query<Option<String>>,
-        Query(_is_user): Query<Option<bool>>,
-        Query(_is_role): Query<Option<bool>>,
-        Query(_is_group): Query<Option<bool>>,
-        _state: Data<&Arc<AppState>>,
-        _auth: BearerAuthorization,
+        Query(page): Query<Option<u32>>,
+        Query(page_size): Query<Option<u32>>,
+        Query(search): Query<Option<String>>,
+        Query(is_user): Query<Option<bool>>,
+        Query(is_role): Query<Option<bool>>,
+        Query(is_group): Query<Option<bool>>,
+        state: Data<&Arc<AppState>>,
+        auth: BearerAuthorization,
     ) -> PaginatePermissionResponses {
-        todo!()
+        // Begin db transaction
+        let mut tx = match state.db.begin().await {
+            Ok(val) => val,
+            Err(err) => {
+                return PaginatePermissionResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "paginate_permission_api",
+                        "begin transaction",
+                        &err.to_string(),
+                    ),
+                ));
+            }
+        };
+
+        // get redis conn from pool
+        let mut redis_conn = match state.redis_conn.get() {
+            Ok(val) => val,
+            Err(err) => {
+                return PaginatePermissionResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "paginate_permission_api",
+                        "get redis pool connection",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+
+        // Validate user token
+        let jwt_token = auth.0.token;
+        let user = match get_user_from_token(&mut tx, &mut redis_conn, jwt_token.clone()).await {
+            Ok(val) => val,
+            Err(err) => {
+                return PaginatePermissionResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "paginate_permission_api",
+                        "get user from token",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+        if user.is_none() {
+            return PaginatePermissionResponses::Unauthorized(
+                Json(UnauthorizedResponse::default()),
+            );
+        }
+        let (data, counts, page_count) = match get_all_permission(
+            &mut tx, page, page_size, search, is_user, is_role, is_group, None, None,
+        )
+        .await
+        {
+            Ok(val) => val,
+            Err(err) => {
+                return PaginatePermissionResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "paginate_permission_api",
+                        "get_all_permission",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+        let mut results: Vec<DetailPermission> = vec![];
+        for item in data {
+            let mut created_by: Option<User> = None;
+            if item.created_by.is_some() {
+                (created_by, _) =
+                    match get_user_by_id(&mut tx, &item.created_by.unwrap(), Some(true)).await {
+                        Ok(val) => val,
+                        Err(err) => {
+                            return PaginatePermissionResponses::InternalServerError(Json(
+                                InternalServerErrorResponse::new(
+                                    "route.permission",
+                                    "paginate_permission_api",
+                                    "get user created_by",
+                                    &err.to_string(),
+                                ),
+                            ))
+                        }
+                    };
+            }
+            let mut updated_by: Option<User> = None;
+            if item.updated_by.is_some() {
+                (updated_by, _) =
+                    match get_user_by_id(&mut tx, &item.updated_by.unwrap(), Some(true)).await {
+                        Ok(val) => val,
+                        Err(err) => {
+                            return PaginatePermissionResponses::InternalServerError(Json(
+                                InternalServerErrorResponse::new(
+                                    "route.permission",
+                                    "paginate_permission_api",
+                                    "get user updated_by",
+                                    &err.to_string(),
+                                ),
+                            ))
+                        }
+                    };
+            }
+            results.push(DetailPermission {
+                id: item.id.to_string(),
+                permission_name: item.permission_name,
+                description: item.description,
+                is_user: item.is_user.unwrap_or(false),
+                is_role: item.is_role.unwrap_or(false),
+                is_group: item.is_group.unwrap_or(false),
+                created_date: datetime_to_string_opt(item.created_date),
+                updated_date: datetime_to_string_opt(item.updated_date),
+                created_by: created_by.map(|x| DetailUserPermission {
+                    id: x.id.to_string(),
+                    user_name: x.user_name,
+                }),
+                updated_by: updated_by.map(|x| DetailUserPermission {
+                    id: x.id.to_string(),
+                    user_name: x.user_name,
+                }),
+            });
+        }
+        PaginatePermissionResponses::Ok(Json(PaginateResponse {
+            counts,
+            page: page.unwrap_or(1),
+            page_count,
+            page_size: page_size.unwrap_or(10),
+            results,
+        }))
     }
 
     #[oai(
@@ -76,10 +207,96 @@ impl ApiPermission {
     )]
     async fn get_all_permission_api(
         &self,
-        _state: Data<&Arc<AppState>>,
-        _auth: BearerAuthorization,
+        state: Data<&Arc<AppState>>,
+        auth: BearerAuthorization,
     ) -> AllPermissionResponses {
-        todo!()
+        // Begin db transaction
+        let mut tx = match state.db.begin().await {
+            Ok(val) => val,
+            Err(err) => {
+                return AllPermissionResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "get_all_permission_api",
+                        "begin transaction",
+                        &err.to_string(),
+                    ),
+                ));
+            }
+        };
+
+        // get redis conn from pool
+        let mut redis_conn = match state.redis_conn.get() {
+            Ok(val) => val,
+            Err(err) => {
+                return AllPermissionResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "get_all_permission_api",
+                        "get redis pool connection",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+
+        // Validate user token
+        let jwt_token = auth.0.token;
+        let user = match get_user_from_token(&mut tx, &mut redis_conn, jwt_token.clone()).await {
+            Ok(val) => val,
+            Err(err) => {
+                return AllPermissionResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "get_all_permission_api",
+                        "get user from token",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+        if user.is_none() {
+            return AllPermissionResponses::Unauthorized(Json(UnauthorizedResponse::default()));
+        }
+        let (data, _, _) = match get_all_permission(
+            &mut tx,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(true),
+        )
+        .await
+        {
+            Ok(val) => val,
+            Err(err) => {
+                return AllPermissionResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "get_all_permission_api",
+                        "get_all_permission",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+        AllPermissionResponses::Ok(Json(
+            data.iter()
+                .map(|x| PermissionAllResponse {
+                    id: x.id.to_string(),
+                    permission_name: x.permission_name.clone(),
+                    description: x.description.clone(),
+                    is_user: x.is_user.unwrap_or(false),
+                    is_role: x.is_role.unwrap_or(false),
+                    is_group: x.is_group.unwrap_or(false),
+                    created_date: datetime_to_string_opt(x.created_date),
+                    updated_date: datetime_to_string_opt(x.updated_date),
+                })
+                .collect(),
+        ))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -90,15 +307,97 @@ impl ApiPermission {
     )]
     async fn get_dropdown_permission_api(
         &self,
-        _state: Data<&Arc<AppState>>,
-        _auth: BearerAuthorization,
-        Query(_search): Query<Option<String>>,
-        Query(_is_user): Query<Option<bool>>,
-        Query(_is_role): Query<Option<bool>>,
-        Query(_is_group): Query<Option<bool>>,
-        Query(_limit): Query<Option<u32>>,
+        state: Data<&Arc<AppState>>,
+        auth: BearerAuthorization,
+        Query(search): Query<Option<String>>,
+        Query(is_user): Query<Option<bool>>,
+        Query(is_role): Query<Option<bool>>,
+        Query(is_group): Query<Option<bool>>,
+        Query(limit): Query<Option<u32>>,
     ) -> DropdownPermissionResponses {
-        todo!()
+        // Begin db transaction
+        let mut tx = match state.db.begin().await {
+            Ok(val) => val,
+            Err(err) => {
+                return DropdownPermissionResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "get_all_permission_api",
+                        "begin transaction",
+                        &err.to_string(),
+                    ),
+                ));
+            }
+        };
+
+        // get redis conn from pool
+        let mut redis_conn = match state.redis_conn.get() {
+            Ok(val) => val,
+            Err(err) => {
+                return DropdownPermissionResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "get_all_permission_api",
+                        "get redis pool connection",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+
+        // Validate user token
+        let jwt_token = auth.0.token;
+        let user = match get_user_from_token(&mut tx, &mut redis_conn, jwt_token.clone()).await {
+            Ok(val) => val,
+            Err(err) => {
+                return DropdownPermissionResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "get_all_permission_api",
+                        "get user from token",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+        if user.is_none() {
+            return DropdownPermissionResponses::Unauthorized(
+                Json(UnauthorizedResponse::default()),
+            );
+        }
+        let (data, _, _) = match get_all_permission(
+            &mut tx,
+            None,
+            None,
+            search,
+            is_user,
+            is_role,
+            is_group,
+            limit,
+            Some(true),
+        )
+        .await
+        {
+            Ok(val) => val,
+            Err(err) => {
+                return DropdownPermissionResponses::InternalServerError(Json(
+                    InternalServerErrorResponse::new(
+                        "route.permission",
+                        "get_all_permission_api",
+                        "get_all_permission",
+                        &err.to_string(),
+                    ),
+                ))
+            }
+        };
+        DropdownPermissionResponses::Ok(Json(
+            data.iter()
+                .map(|x| PermissionDropdownResponse {
+                    id: x.id.to_string(),
+                    permission_name: x.permission_name.clone(),
+                })
+                .collect(),
+        ))
     }
 
     #[oai(

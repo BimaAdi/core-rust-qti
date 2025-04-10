@@ -23,6 +23,9 @@ use crate::{
         },
         user::User,
     },
+    schema::permission::{
+        DetailPermission, DetailUserPermission, PermissionAllResponse, PermissionDropdownResponse,
+    },
     settings::get_config,
     AppState,
 };
@@ -31,6 +34,255 @@ use crate::{
 struct ExtData {
     pub created_by: User,
     pub updated_by: User,
+}
+
+#[sqlx::test]
+async fn test_paginate_permission_api(pool: PgPool) -> anyhow::Result<()> {
+    // Given
+    let mut config = get_config();
+    config.prefix = Some("/api".to_string());
+    let client = redis::Client::open(config.redis_url.clone()).unwrap();
+    let redis_pool = r2d2::Pool::builder().build(client).unwrap();
+    let app_state = Arc::new(AppState {
+        db: pool,
+        redis_conn: redis_pool,
+    });
+    let mut db = app_state.db.acquire().await?;
+    let mut redis_conn = app_state.redis_conn.get()?;
+    let test_user = generate_test_user(
+        &mut db,
+        &mut redis_conn,
+        config.clone(),
+        "test_user",
+        "password",
+    )
+    .await?;
+    let mut permission_factory = PermissionFactory::<ExtData>::new();
+    permission_factory.modified_many(|data, _, ext| Permission {
+        id: data.id,
+        permission_name: data.permission_name.clone(),
+        is_user: data.is_user,
+        is_role: data.is_role,
+        is_group: data.is_group,
+        description: data.description.clone(),
+        created_by: Some(ext.created_by.id),
+        updated_by: Some(ext.updated_by.id),
+        created_date: data.created_date,
+        updated_date: data.updated_date,
+    });
+    let mut permissions = permission_factory
+        .generate_many(
+            &app_state.db,
+            5,
+            ExtData {
+                created_by: test_user.user.clone(),
+                updated_by: test_user.user.clone(),
+            },
+        )
+        .await?;
+    let app = init_openapi_route(app_state.clone(), &config);
+    let cli = TestClient::new(app);
+
+    // When
+    let resp = cli
+        .get("/api/permissions")
+        .header("authorization", format!("Bearer {}", test_user.token))
+        .send()
+        .await;
+
+    // Expect
+    resp.assert_status_is_ok();
+    permissions.sort_by(|a, b| {
+        if a.updated_date > b.updated_date {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        }
+    });
+    let mut results: Vec<DetailPermission> = vec![];
+    for item in permissions {
+        results.push(DetailPermission {
+            id: item.id.to_string(),
+            permission_name: item.permission_name,
+            description: item.description,
+            is_user: item.is_user.unwrap_or(false),
+            is_role: item.is_role.unwrap_or(false),
+            is_group: item.is_group.unwrap_or(false),
+            created_date: datetime_to_string_opt(item.created_date),
+            updated_date: datetime_to_string_opt(item.updated_date),
+            created_by: Some(DetailUserPermission {
+                id: test_user.user.id.to_string(),
+                user_name: test_user.user.user_name.clone(),
+            }),
+            updated_by: Some(DetailUserPermission {
+                id: test_user.user.id.to_string(),
+                user_name: test_user.user.user_name.clone(),
+            }),
+        });
+    }
+    resp.assert_json(&json!({
+        "counts": 5,
+        "page": 1,
+        "page_count": 1,
+        "page_size": 10,
+        "results": results,
+    }))
+    .await;
+    Ok(())
+}
+
+#[sqlx::test]
+async fn test_get_all_permission_api(pool: PgPool) -> anyhow::Result<()> {
+    // Given
+    let mut config = get_config();
+    config.prefix = Some("/api".to_string());
+    let client = redis::Client::open(config.redis_url.clone()).unwrap();
+    let redis_pool = r2d2::Pool::builder().build(client).unwrap();
+    let app_state = Arc::new(AppState {
+        db: pool,
+        redis_conn: redis_pool,
+    });
+    let mut db = app_state.db.acquire().await?;
+    let mut redis_conn = app_state.redis_conn.get()?;
+    let test_user = generate_test_user(
+        &mut db,
+        &mut redis_conn,
+        config.clone(),
+        "test_user",
+        "password",
+    )
+    .await?;
+    let mut permission_factory = PermissionFactory::<ExtData>::new();
+    permission_factory.modified_many(|data, _, ext| Permission {
+        id: data.id,
+        permission_name: data.permission_name.clone(),
+        is_user: data.is_user,
+        is_role: data.is_role,
+        is_group: data.is_group,
+        description: data.description.clone(),
+        created_by: Some(ext.created_by.id),
+        updated_by: Some(ext.updated_by.id),
+        created_date: data.created_date,
+        updated_date: data.updated_date,
+    });
+    let mut permissions = permission_factory
+        .generate_many(
+            &app_state.db,
+            5,
+            ExtData {
+                created_by: test_user.user.clone(),
+                updated_by: test_user.user.clone(),
+            },
+        )
+        .await?;
+    let app = init_openapi_route(app_state.clone(), &config);
+    let cli = TestClient::new(app);
+
+    // When
+    let resp = cli
+        .get("/api/permissions/all")
+        .header("authorization", format!("Bearer {}", test_user.token))
+        .send()
+        .await;
+
+    // Expect
+    resp.assert_status_is_ok();
+    permissions.sort_by(|a, b| {
+        if a.updated_date > b.updated_date {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        }
+    });
+    let results = permissions
+        .iter()
+        .map(|x| PermissionAllResponse {
+            id: x.id.to_string(),
+            permission_name: x.permission_name.clone(),
+            description: x.description.clone(),
+            is_user: x.is_user.unwrap_or(false),
+            is_role: x.is_role.unwrap_or(false),
+            is_group: x.is_group.unwrap_or(false),
+            created_date: datetime_to_string_opt(x.created_date),
+            updated_date: datetime_to_string_opt(x.updated_date),
+        })
+        .collect::<Vec<PermissionAllResponse>>();
+    resp.assert_json(&json!(results)).await;
+    Ok(())
+}
+
+#[sqlx::test]
+async fn test_get_dropdown_permission_api(pool: PgPool) -> anyhow::Result<()> {
+    // Given
+    let mut config = get_config();
+    config.prefix = Some("/api".to_string());
+    let client = redis::Client::open(config.redis_url.clone()).unwrap();
+    let redis_pool = r2d2::Pool::builder().build(client).unwrap();
+    let app_state = Arc::new(AppState {
+        db: pool,
+        redis_conn: redis_pool,
+    });
+    let mut db = app_state.db.acquire().await?;
+    let mut redis_conn = app_state.redis_conn.get()?;
+    let test_user = generate_test_user(
+        &mut db,
+        &mut redis_conn,
+        config.clone(),
+        "test_user",
+        "password",
+    )
+    .await?;
+    let mut permission_factory = PermissionFactory::<ExtData>::new();
+    permission_factory.modified_many(|data, _, ext| Permission {
+        id: data.id,
+        permission_name: data.permission_name.clone(),
+        is_user: data.is_user,
+        is_role: data.is_role,
+        is_group: data.is_group,
+        description: data.description.clone(),
+        created_by: Some(ext.created_by.id),
+        updated_by: Some(ext.updated_by.id),
+        created_date: data.created_date,
+        updated_date: data.updated_date,
+    });
+    let mut permissions = permission_factory
+        .generate_many(
+            &app_state.db,
+            5,
+            ExtData {
+                created_by: test_user.user.clone(),
+                updated_by: test_user.user.clone(),
+            },
+        )
+        .await?;
+    let app = init_openapi_route(app_state.clone(), &config);
+    let cli = TestClient::new(app);
+
+    // When
+    let resp = cli
+        .get("/api/permissions/dropdown")
+        .header("authorization", format!("Bearer {}", test_user.token))
+        .send()
+        .await;
+
+    // Expect
+    resp.assert_status_is_ok();
+    permissions.sort_by(|a, b| {
+        if a.updated_date > b.updated_date {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        }
+    });
+    let results = permissions
+        .iter()
+        .map(|x| PermissionDropdownResponse {
+            id: x.id.to_string(),
+            permission_name: x.permission_name.clone(),
+        })
+        .collect::<Vec<PermissionDropdownResponse>>();
+    resp.assert_json(&json!(results)).await;
+    Ok(())
 }
 
 #[sqlx::test]

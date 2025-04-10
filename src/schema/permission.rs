@@ -16,12 +16,12 @@ pub struct DetailUserPermission {
 pub struct DetailPermission {
     pub id: String,
     pub permission_name: String,
-    pub description: String,
+    pub description: Option<String>,
     pub is_user: bool,
     pub is_role: bool,
     pub is_group: bool,
-    pub created_date: String,
-    pub updated_date: String,
+    pub created_date: Option<String>,
+    pub updated_date: Option<String>,
     pub created_by: Option<DetailUserPermission>,
     pub updated_by: Option<DetailUserPermission>,
 }
@@ -42,12 +42,12 @@ pub enum PaginatePermissionResponses {
 pub struct PermissionAllResponse {
     pub id: String,
     pub permission_name: String,
-    pub description: String,
+    pub description: Option<String>,
     pub is_user: bool,
     pub is_role: bool,
     pub is_group: bool,
-    pub created_date: String,
-    pub updated_date: String,
+    pub created_date: Option<String>,
+    pub updated_date: Option<String>,
 }
 
 #[derive(ApiResponse)]
@@ -64,8 +64,8 @@ pub enum AllPermissionResponses {
 
 #[derive(Object, Deserialize, Serialize)]
 pub struct PermissionDropdownResponse {
-    id: String,
-    permission_name: String,
+    pub id: String,
+    pub permission_name: String,
 }
 
 #[derive(ApiResponse)]
