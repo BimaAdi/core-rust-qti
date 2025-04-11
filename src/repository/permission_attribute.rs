@@ -10,6 +10,7 @@ pub async fn get_all_permission_attribute(
     tx: &mut Transaction<'_, Postgres>,
     page: Option<u32>,
     page_size: Option<u32>,
+    search: Option<String>,
     limit: Option<u32>,
     all: Option<bool>,
 ) -> anyhow::Result<(Vec<PermissionAttribute>, u32, u32)> {
@@ -17,8 +18,12 @@ pub async fn get_all_permission_attribute(
     let page_size = page_size.unwrap_or(10);
     let all = all.unwrap_or(false);
     let limit_param = limit;
-    let binds: Vec<SqlxBinds> = vec![];
-    let filters: Vec<String> = vec![];
+    let mut binds: Vec<SqlxBinds> = vec![];
+    let mut filters: Vec<String> = vec![];
+    if search.is_some() {
+        binds.push(SqlxBinds::String(format!("%{}%", search.unwrap())));
+        filters.push(format!("name ilike ${}", binds.len()));
+    }
 
     let mut limit = match all {
         true => None,
@@ -93,4 +98,45 @@ pub async fn get_permission_attribute_by_ids(
     let q = binds_query_as::<PermissionAttribute>(&stmt, binds.clone());
     let data = q.fetch_all(&mut **tx).await?;
     Ok(data)
+}
+
+pub async fn create_permission_attribute(
+    tx: &mut Transaction<'_, Postgres>,
+    permission_attribute: &PermissionAttribute,
+) -> anyhow::Result<()> {
+    sqlx::query(format!("INSERT INTO {} (id, name, description, created_date, updated_date) VALUES ($1, $2, $3, $4, $5)", TABLE_NAME).as_str())
+        .bind(permission_attribute.id)
+        .bind(&permission_attribute.name)
+        .bind(&permission_attribute.description)
+        .bind(permission_attribute.created_date)
+        .bind(permission_attribute.updated_date)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+pub async fn update_permission_attribute(
+    tx: &mut Transaction<'_, Postgres>,
+    permission_attribute: &PermissionAttribute,
+) -> anyhow::Result<()> {
+    sqlx::query(format!("UPDATE {} SET name = $1, description = $2, created_date = $3, updated_date = $4 WHERE id = $5", TABLE_NAME).as_str())
+        .bind(&permission_attribute.name)
+        .bind(&permission_attribute.description)
+        .bind(permission_attribute.created_date)
+        .bind(permission_attribute.updated_date)
+        .bind(permission_attribute.id)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+pub async fn delete_permission_attribute(
+    tx: &mut Transaction<'_, Postgres>,
+    permission_attribute: &PermissionAttribute,
+) -> anyhow::Result<()> {
+    sqlx::query(format!("DELETE FROM {} WHERE id = $1", TABLE_NAME).as_str())
+        .bind(permission_attribute.id)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
 }
