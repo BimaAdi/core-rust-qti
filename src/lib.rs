@@ -8,8 +8,9 @@ use poem_openapi::OpenApiService;
 use r2d2::Pool as r2d2Pool;
 use redis::Client;
 use route::{
-    auth::ApiAuth, group::ApiGroup, permission::ApiPermission,
-    permission_attribute::ApiPermissionAttribute, role::ApiRole, user::ApiUser,
+    auth::ApiAuth, group::ApiGroup, group_permission::ApiGroupPermission,
+    permission::ApiPermission, permission_attribute::ApiPermissionAttribute, role::ApiRole,
+    role_permission::ApiRolePermission, user::ApiUser, user_permission::ApiUserPermission,
 };
 use settings::Config;
 use sqlx::{Pool, Postgres};
@@ -41,6 +42,9 @@ pub fn init_openapi_route(
             ApiGroup,
             ApiPermission,
             ApiPermissionAttribute,
+            ApiRolePermission,
+            ApiGroupPermission,
+            ApiUserPermission,
         ),
         "Core",
         "1.0",
